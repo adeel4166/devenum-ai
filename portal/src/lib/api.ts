@@ -52,15 +52,19 @@ export interface Agent {
   currentTask: { id: number; title: string; projectId: number } | null;
   runs?: RunLite[];
 }
+export interface PreviewInfo { projectId: number; slug: string; port: number; url: string; kind: string; startedAt: string; projectName?: string }
 export interface Project {
   id: number; name: string; slug: string; category: string; description: string; techStack: string;
   repoPath: string; gitBranch: string; status: string; progressPercent: number; createdAt: string;
+  githubRepoUrl?: string | null;
   _count?: { tasks: number };
+  taskCounts?: Record<string, number>; lastActivityAt?: string; preview?: PreviewInfo | null;
 }
 export interface AgentLite { id: number; name: string; slug: string; status: string; modelProvider?: string }
 export interface Task {
   id: number; projectId: number; assignedAgentId: number | null; title: string; description: string;
   priority: string; status: string; outputSummary: string | null; executionTimeMs: number | null; createdAt: string;
+  parentTaskId?: number | null; dependencies?: number[] | null;
   assignedAgent: AgentLite | null; project: { id: number; name: string };
   runs?: RunLite[];
 }
@@ -68,15 +72,58 @@ export interface Proposal {
   id: number; projectId: number; actionType: string; targetResource: string; scopeSummary: string; rationale: string;
   riskLevel: string; rollbackPlan: string; validationPlan: string; status: string; expiresAt: string; createdAt: string;
   project?: { id: number; name: string }; task: { id: number; title: string } | null;
-  requestingAgent: { id: number; name: string };
+  requestingAgent: { id: number; name: string; slug?: string; roleTitle?: string; modelProvider?: string };
+  branchName?: string | null; changedFiles?: string[] | null;
+  mergeStatus?: "MERGED" | "FAILED" | null; mergeCommit?: string | null; mergeError?: string | null; mergedAt?: string | null;
   approvals?: { decision: string; comment: string | null; decidedAt: string; approver: { name: string } }[];
 }
 export interface ProjectDetail extends Project {
   tasks: Task[]; proposals: Proposal[]; agents: AgentLite[];
 }
+export interface Job<T> { id: string; kind: string; status: "running" | "succeeded" | "failed"; progress: string | null; result: T | null; error: string | null }
+export interface Health {
+  backend: { ok: boolean; uptimeSec: number }; database: { ok: boolean };
+  worker: { ok: boolean; lastSeen: string | null; info: { activeRuns?: number; paused?: boolean } | null };
+  bot: { ok: boolean; lastSeen: string | null; info: { user?: string } | null };
+  github: { configured: boolean }; previews: PreviewInfo[];
+}
+export interface Kpis { activeProjects: number; runningAgents: number; idleAgents: number; pendingApprovals: number; totalAgents: number; completedRuns: number }
+
+/**
+ * Long operations (auto-build, preview start, GitHub push, chat) run as backend jobs so they never hit the
+ * proxy timeout. POST returns { jobId }; this polls until the job finishes.
+ */
+export async function runJob<T>(path: string, body: unknown, onProgress?: (msg: string) => void, timeoutMs = 900_000): Promise<T> {
+  const { jobId } = await api<{ jobId: string }>(path, { method: "POST", body });
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 1200));
+    const job = await api<Job<T>>(`/jobs/${jobId}`);
+    if (job.progress) onProgress?.(job.progress);
+    if (job.status === "succeeded") return job.result as T;
+    if (job.status === "failed") throw new ApiError(500, job.error ?? "The operation failed");
+  }
+  throw new ApiError(504, "Timed out waiting for the operation to finish");
+}
+
+/** Authenticated file download (the browser can't attach the bearer token to a plain link). */
+export async function downloadFile(path: string, fallbackName: string) {
+  const token = tokenStore.get();
+  const res = await fetch(`${API_URL}/api${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, data.error || `Download failed (${res.status})`);
+  }
+  const name = res.headers.get("content-disposition")?.match(/filename="?([^";]+)"?/)?.[1] ?? fallbackName;
+  const url = URL.createObjectURL(await res.blob());
+  const a = Object.assign(document.createElement("a"), { href: url, download: name });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  return name;
+}
 export interface AuditEvent { id: number; actorType: string; actorId: string | null; action: string; target: string | null; details: unknown; createdAt: string }
 export interface Settings {
-  geminiApiKey: string; claudeCliEnabled: boolean; maxConcurrentAgents: number; autoExpireHours: number;
+  geminiApiKey: string; claudeCliEnabled: boolean; globalPaused?: boolean; maxConcurrentAgents: number; autoExpireHours: number;
   maxStepsPerRun: number; maxRunTimeoutSeconds: number; dailyTokenBudget: number; requireApprovalForHighRisk: boolean;
 }
 

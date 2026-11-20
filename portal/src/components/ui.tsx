@@ -1,6 +1,8 @@
 "use client";
 import { useEffect } from "react";
-import { X } from "lucide-react";
+import {
+  Bot, Brain, Bug, Code2, Compass, Gamepad2, LucideIcon, Palette, Rocket, Server, ShieldCheck, Smartphone, Sparkles, X,
+} from "lucide-react";
 import { label } from "@/lib/api";
 
 const TONES: Record<string, string> = {
@@ -110,7 +112,7 @@ export function Field({ label: l, children, hint }: { label: string; children: R
 export function Progress({ value }: { value: number }) {
   return (
     <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
-      <div className="h-full rounded-full bg-gradient-to-r from-brand to-sky-400 transition-all" style={{ width: `${Math.min(100, Math.max(0, value))}%` }} />
+      <div className="h-full rounded-full bg-gradient-to-r from-brand to-amberx transition-all" style={{ width: `${Math.min(100, Math.max(0, value))}%` }} />
     </div>
   );
 }
@@ -119,7 +121,7 @@ export function Tabs<T extends string>({ value, onChange, tabs }: { value: T; on
   return (
     <div className="flex rounded-lg border border-white/10 p-0.5 text-sm">
       {tabs.map(t => (
-        <button key={t.id} onClick={() => onChange(t.id)} className={`rounded-md px-3 py-1 transition ${value === t.id ? "bg-brand text-white" : "text-slate-400 hover:text-slate-200"}`}>
+        <button key={t.id} onClick={() => onChange(t.id)} className={`rounded-md px-3 py-1 transition ${value === t.id ? "bg-white/10 text-white shadow-sm" : "text-slate-400 hover:text-slate-200"}`}>
           {t.label}{t.count != null && <span className="ml-1.5 text-xs opacity-70">{t.count}</span>}
         </button>
       ))}
@@ -132,3 +134,80 @@ export function Terminal({ text }: { text: string }) {
 }
 
 export const providerName = (p: string) => (p === "CLAUDE_CODE" ? "Claude Code" : p === "GEMINI_API" ? "Gemini API" : p);
+
+/** Monospace pill for git branches, IDs and paths. */
+export const Mono = ({ children, title }: { children: React.ReactNode; title?: string }) => <span className="mono-badge" title={title}>{children}</span>;
+
+export function EmptyState({ icon: Icon, title, text, action }: { icon: LucideIcon; title: string; text: string; action?: React.ReactNode }) {
+  return (
+    <div className="card flex flex-col items-center px-6 py-12 text-center">
+      <div className="mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-brand/10 text-brand"><Icon size={22} /></div>
+      <h3 className="font-semibold text-white">{title}</h3>
+      <p className="mt-1 max-w-md text-sm text-slate-400">{text}</p>
+      {action && <div className="mt-4">{action}</div>}
+    </div>
+  );
+}
+
+export function HelpText({ children }: { children: React.ReactNode }) {
+  return <p className="text-xs leading-relaxed text-slate-500">{children}</p>;
+}
+
+const AGENT_ICONS: Record<string, { icon: LucideIcon; color: string }> = {
+  "project-manager": { icon: Compass, color: "from-amber-500 to-orange-600" },
+  "software-architect": { icon: Brain, color: "from-violet-500 to-indigo-600" },
+  "ui-ux-designer": { icon: Palette, color: "from-pink-500 to-rose-600" },
+  "frontend-developer": { icon: Code2, color: "from-sky-500 to-blue-600" },
+  "backend-developer": { icon: Server, color: "from-emerald-500 to-teal-600" },
+  "mobile-developer": { icon: Smartphone, color: "from-cyan-500 to-sky-600" },
+  "game-developer": { icon: Gamepad2, color: "from-fuchsia-500 to-purple-600" },
+  "qa-engineer": { icon: Bug, color: "from-lime-500 to-green-600" },
+  "security-engineer": { icon: ShieldCheck, color: "from-red-500 to-rose-700" },
+  "devops-engineer": { icon: Rocket, color: "from-orange-500 to-red-600" },
+  "executive-assistant": { icon: Sparkles, color: "from-[#d97757] to-[#f0a35e]" },
+};
+
+export function AgentAvatar({ slug, size = 40, working }: { slug?: string; size?: number; working?: boolean }) {
+  const a = (slug && AGENT_ICONS[slug]) || { icon: Bot, color: "from-stone-500 to-stone-700" };
+  return (
+    <span className="relative inline-flex shrink-0">
+      <span className={`grid place-items-center rounded-xl bg-gradient-to-br ${a.color} text-white shadow-md shadow-black/30`} style={{ width: size, height: size }}>
+        <a.icon size={Math.round(size * 0.48)} />
+      </span>
+      {working && (
+        <span className="absolute -right-0.5 -top-0.5 flex h-3 w-3">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75" />
+          <span className="relative inline-flex h-3 w-3 rounded-full border-2 border-ink-800 bg-sky-400" />
+        </span>
+      )}
+    </span>
+  );
+}
+
+export function StatCard({ label: l, value, hint, icon: Icon, accent, pulse, onClick }: {
+  label: string; value: React.ReactNode; hint?: string; icon: LucideIcon; accent: string; pulse?: boolean; onClick?: () => void;
+}) {
+  return (
+    <div onClick={onClick} role={onClick ? "button" : undefined} tabIndex={onClick ? 0 : undefined}
+      onKeyDown={e => onClick && (e.key === "Enter" || e.key === " ") && onClick()}
+      className={`card relative overflow-hidden p-4 ${onClick ? "card-hover" : ""}`}>
+      <div className="flex items-start justify-between">
+        <div>
+          <div className="text-xs font-medium uppercase tracking-wide text-slate-400">{l}</div>
+          <div className="mt-2 text-3xl font-semibold tabular-nums text-white">{value}</div>
+          {hint && <div className="mt-1 text-xs text-slate-500">{hint}</div>}
+        </div>
+        <span className={`relative grid h-10 w-10 place-items-center rounded-xl ${accent}`}>
+          {pulse && <span className="absolute inset-0 animate-ping rounded-xl bg-sky-400/30" />}
+          <Icon size={19} />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+export const RISK_TONE: Record<string, string> = {
+  LOW: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+  MEDIUM: "border-amber-500/30 bg-amber-500/10 text-amber-300",
+  HIGH: "border-rose-500/30 bg-rose-500/10 text-rose-300",
+};

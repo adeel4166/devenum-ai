@@ -14,7 +14,7 @@ const SEQ = ["BACKLOG", "READY", "IN_PROGRESS", "BLOCKED", "DONE"];
 const MOVE_TO = ["BACKLOG", "READY", "IN_PROGRESS", "IN_REVIEW", "BLOCKED", "DONE"];
 
 export default function TasksPage() {
-  const { projectId, projects, canWrite } = useSession();
+  const { projectId, projects, canWrite, setProjectId } = useSession();
   const { data, setData, error, loading, reload } = useApi<Task[]>(`/tasks${projectId ? `?projectId=${projectId}` : ""}`, 8000);
   const { run } = useToast();
   const [create, setCreate] = useState(false);
@@ -33,7 +33,13 @@ export default function TasksPage() {
   return (
     <>
       <PageHeader title="Task Board" subtitle={projectId ? projects.find(p => p.id === projectId)?.name : "All projects — click a card for details"}
-        action={canWrite && <button className="btn-primary" onClick={() => setCreate(true)}><Plus size={16} /> New task</button>} />
+        action={<div className="flex flex-wrap gap-2">
+          <select className="input !w-auto" value={projectId ?? ""} onChange={e => setProjectId(e.target.value ? Number(e.target.value) : null)} aria-label="Filter by project">
+            <option value="">All projects</option>
+            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          {canWrite && <button className="btn-primary" onClick={() => setCreate(true)}><Plus size={16} /> New task</button>}
+        </div>} />
       <ErrorBox message={error} />
       {loading && !data && <div className="grid gap-4 md:grid-cols-3"><CardSkeletons n={3} h="h-64" /></div>}
       <div className="flex gap-4 overflow-x-auto pb-4">

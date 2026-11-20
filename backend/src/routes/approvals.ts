@@ -4,6 +4,7 @@ import { prisma } from "../db";
 import { requireRole } from "../auth";
 import { idParam, wrap } from "../http";
 import { decideProposal } from "../proposals";
+import { requestChanges } from "../services/ops";
 
 export const approvalsRouter = Router();
 
@@ -20,7 +21,7 @@ approvalsRouter.get("/", wrap(async (req, res) => {
     include: {
       project: { select: { id: true, name: true } },
       task: { select: { id: true, title: true } },
-      requestingAgent: { select: { id: true, name: true, slug: true } },
+      requestingAgent: { select: { id: true, name: true, slug: true, roleTitle: true, modelProvider: true } },
       approvals: { include: { approver: { select: { name: true } } }, orderBy: { decidedAt: "desc" } },
     },
   });
@@ -49,4 +50,10 @@ proposalsRouter.post("/:id/approve", requireRole("CEO"), wrap(async (req, res) =
 proposalsRouter.post("/:id/reject", requireRole("CEO"), wrap(async (req, res) => {
   const { comment } = commentBody.parse(req.body ?? {});
   res.json(await decideProposal(idParam(req), "REJECTED", { approverId: req.user!.id, actorType: "CEO", actorId: req.user!.id }, comment));
+}));
+
+/** Request Changes: reject with feedback and immediately re-queue a follow-up task for the same agent. */
+proposalsRouter.post("/:id/request-changes", requireRole("CEO"), wrap(async (req, res) => {
+  const { comment } = z.object({ comment: z.string().trim().min(2).max(2000) }).parse(req.body ?? {});
+  res.status(201).json(await requestChanges(idParam(req), comment, { actorType: "CEO", actorId: String(req.user!.id), approverId: req.user!.id }));
 }));

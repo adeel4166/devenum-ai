@@ -12,6 +12,8 @@ import { tasksRouter } from "./routes/tasks";
 import { approvalsRouter, proposalsRouter } from "./routes/approvals";
 import { botRouter } from "./routes/bot";
 import { requireServiceToken } from "./serviceAuth";
+import { chatRouter, jobsRouter } from "./routes/chat";
+import { restorePreviews } from "./services/preview";
 import { logsRouter } from "./routes/logs";
 import { systemRouter } from "./routes/system";
 
@@ -30,6 +32,8 @@ app.use("/api/projects", requireAuth, projectsRouter);
 app.use("/api/tasks", requireAuth, tasksRouter);
 app.use("/api/approvals", requireAuth, approvalsRouter);
 app.use("/api/proposals", requireAuth, proposalsRouter);
+app.use("/api/chat", requireAuth, chatRouter);
+app.use("/api/jobs", requireAuth, jobsRouter);
 // Internal service API for devenum-bot (shared BOT_SERVICE_TOKEN, not a user JWT).
 app.use("/api/bot", requireServiceToken, botRouter);
 app.use("/api/logs", requireAuth, logsRouter);
@@ -41,3 +45,5 @@ app.use(errorHandler);
 
 const port = Number(process.env.PORT || 4200);
 app.listen(port, () => console.log(`Devenum backend listening on http://localhost:${port}`));
+// Preview servers outlive backend restarts; re-adopt the ones still running.
+restorePreviews().catch(e => console.error(JSON.stringify({ level: "warn", message: `preview restore failed: ${(e as Error).message}` })));

@@ -5,13 +5,15 @@ const RISK_COLOR = { LOW: 0x22c55e, MEDIUM: 0xf59e0b, HIGH: 0xef4444 } as const;
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 const ts = (iso: string) => `<t:${Math.floor(new Date(iso).getTime() / 1000)}:R>`;
 
+/** Button / modal custom IDs. Format "<action>:<numeric id>"; legacy "devenum:<action>:<id>" is still accepted. */
+export const ACTIONS = ["approve", "reject", "rejectmodal", "proposal_revise", "proposal_revise_modal",
+  "gh_push_private", "gh_push_public", "gh_push_skip", "preview_stop"] as const;
+export type Action = (typeof ACTIONS)[number];
 export const ids = {
-  approve: (id: number) => `devenum:approve:${id}`,
-  reject: (id: number) => `devenum:reject:${id}`,
-  rejectModal: (id: number) => `devenum:rejectmodal:${id}`,
-  parse: (customId: string) => {
-    const m = customId.match(/^devenum:(approve|reject|rejectmodal):(\d+)$/);
-    return m ? { action: m[1] as "approve" | "reject" | "rejectmodal", id: Number(m[2]) } : null;
+  make: (action: Action, id: number) => `${action}:${id}`,
+  parse: (customId: string): { action: Action; id: number } | null => {
+    const m = customId.replace(/^devenum:/, "").match(/^([a-z_]+):(\d+)$/);
+    return m && (ACTIONS as readonly string[]).includes(m[1]) ? { action: m[1] as Action, id: Number(m[2]) } : null;
   },
 };
 
@@ -39,8 +41,24 @@ export function proposalEmbed(p: Proposal) {
 
 export function decisionButtons(id: number, disabled = false) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId(ids.approve(id)).setLabel("Approve").setStyle(ButtonStyle.Success).setDisabled(disabled),
-    new ButtonBuilder().setCustomId(ids.reject(id)).setLabel("Reject").setStyle(ButtonStyle.Danger).setDisabled(disabled),
+    new ButtonBuilder().setCustomId(ids.make("approve", id)).setLabel("Approve").setStyle(ButtonStyle.Success).setDisabled(disabled),
+    new ButtonBuilder().setCustomId(ids.make("proposal_revise", id)).setLabel("Request Changes").setStyle(ButtonStyle.Primary).setDisabled(disabled),
+    new ButtonBuilder().setCustomId(ids.make("reject", id)).setLabel("Reject").setStyle(ButtonStyle.Danger).setDisabled(disabled),
+  );
+}
+
+export function githubButtons(projectId: number, disabled = false) {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(ids.make("gh_push_private", projectId)).setLabel("Push (Private Repo)").setEmoji("🔒").setStyle(ButtonStyle.Success).setDisabled(disabled),
+    new ButtonBuilder().setCustomId(ids.make("gh_push_public", projectId)).setLabel("Push (Public Repo)").setEmoji("🌍").setStyle(ButtonStyle.Primary).setDisabled(disabled),
+    new ButtonBuilder().setCustomId(ids.make("gh_push_skip", projectId)).setLabel("Skip").setStyle(ButtonStyle.Secondary).setDisabled(disabled),
+  );
+}
+
+export function previewButtons(projectId: number, url: string, disabled = false) {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setLabel("Open Preview").setStyle(ButtonStyle.Link).setURL(url).setDisabled(disabled),
+    new ButtonBuilder().setCustomId(ids.make("preview_stop", projectId)).setLabel("Stop Preview").setEmoji("⏹").setStyle(ButtonStyle.Danger).setDisabled(disabled),
   );
 }
 

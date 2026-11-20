@@ -1,68 +1,181 @@
 "use client";
 import { useEffect, useState } from "react";
-import { KeyRound, Plus, Save } from "lucide-react";
-import { api, fmtDate, Settings, TeamUser } from "@/lib/api";
+import { Activity, Bot, Database, Github, Globe, KeyRound, Pause, Play, Plus, Save, Server, Square, Workflow } from "lucide-react";
+import { api, fmtDate, Health, Settings, TeamUser, timeAgo } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { useSession } from "@/lib/session";
 import { useToast } from "@/components/toast";
-import { Badge, ErrorBox, Field, Modal, PageHeader, Skeleton } from "@/components/ui";
+import { Badge, ErrorBox, Field, HelpText, Modal, PageHeader, Skeleton } from "@/components/ui";
 
 export default function SettingsPage() {
   const { canWrite, isCeo } = useSession();
   return (
     <>
-      <PageHeader title="Settings" subtitle="AI engine, security and team access" />
-      <div className="max-w-3xl space-y-6">
-        <EngineSection canWrite={canWrite} />
-        <PasswordSection />
-        {isCeo && <TeamSection />}
+      <PageHeader title="Settings & Controls" subtitle="Run or pause the agency, set how many agents work at once, check system health, and manage your team." />
+      <div className="grid gap-6 xl:grid-cols-[1fr_24rem]">
+        <div className="space-y-6">
+          <AgencySection canWrite={canWrite} />
+          <AdvancedSection canWrite={canWrite} />
+          <PasswordSection />
+          {isCeo && <TeamSection />}
+        </div>
+        <HealthPanel canWrite={canWrite} />
       </div>
     </>
   );
 }
 
-function EngineSection({ canWrite }: { canWrite: boolean }) {
-  const { data, error } = useApi<Settings>("/settings");
+function Toggle({ on, onChange, disabled, label: l }: { on: boolean; onChange: (v: boolean) => void; disabled?: boolean; label: string }) {
+  return (
+    <button type="button" role="switch" aria-checked={on} aria-label={l} disabled={disabled} onClick={() => onChange(!on)}
+      className={`relative h-6 w-11 shrink-0 rounded-full transition disabled:opacity-50 ${on ? "bg-emerald-500" : "bg-white/15"}`}>
+      <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${on ? "left-[22px]" : "left-0.5"}`} />
+    </button>
+  );
+}
+
+function AgencySection({ canWrite }: { canWrite: boolean }) {
+  const status = useApi<{ globalPaused: boolean }>("/system/status", 8000);
+  const { data, error, reload } = useApi<Settings>("/settings");
+  const { run, toast } = useToast();
+  const [max, setMax] = useState(3);
+  const [gemini, setGemini] = useState("");
+  const [claude, setClaude] = useState(true);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (data) { setMax(data.maxConcurrentAgents); setGemini(data.geminiApiKey); setClaude(data.claudeCliEnabled); } }, [data]);
+  const paused = status.data?.globalPaused ?? false;
+
+  async function setPaused(next: boolean) {
+    if (next && !window.confirm("Pause the whole agency? Running agent jobs are cancelled and re-queued.")) return;
+    setBusy(true);
+    try { await api(next ? "/system/pause-all" : "/system/resume-all", { method: "POST" }); toast("success", next ? "Agency paused" : "Agency active again"); status.reload(); }
+    catch (e) { toast("error", (e as Error).message); } finally { setBusy(false); }
+  }
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    const r = await run(() => api<Settings>("/settings", { method: "PUT", body: { maxConcurrentAgents: max, geminiApiKey: gemini, claudeCliEnabled: claude } }), "Settings saved");
+    if (r) reload();
+  }
+
+  if (!data) return error ? <ErrorBox message={error} /> : <Skeleton className="h-80" />;
+  return (
+    <form onSubmit={save} className="card space-y-5 p-5">
+      <h2 className="font-semibold text-white">Agency controls</h2>
+      <div className={`flex items-center justify-between gap-4 rounded-xl border p-4 ${paused ? "border-rose-500/30 bg-rose-500/[0.06]" : "border-emerald-500/30 bg-emerald-500/[0.06]"}`}>
+        <div className="flex items-center gap-3">
+          <span className={`grid h-10 w-10 place-items-center rounded-xl ${paused ? "bg-rose-500/15 text-rose-300" : "bg-emerald-500/15 text-emerald-300"}`}>{paused ? <Pause size={18} /> : <Play size={18} />}</span>
+          <div>
+            <div className="font-medium text-white">Agency is {paused ? "paused" : "active"}</div>
+            <HelpText>{paused ? "No tasks start and running jobs were stopped. Switch on to resume." : "Agents pick up READY tasks automatically. Switch off for an emergency stop."}</HelpText>
+          </div>
+        </div>
+        <Toggle on={!paused} onChange={v => setPaused(!v)} disabled={!canWrite || busy || status.loading} label="Agency active" />
+      </div>
+      <fieldset disabled={!canWrite} className="space-y-5">
+        <Field label={`Max concurrent agents: ${max}`} hint="How many agents may run at the same time. Each running agent is one Claude Code session on this server.">
+          <div className="flex items-center gap-3">
+            <input type="range" min={1} max={11} value={max} onChange={e => setMax(Number(e.target.value))} className="w-full accent-[#d97757]" />
+            <input type="number" min={1} max={50} value={max} onChange={e => setMax(Number(e.target.value))} className="input !w-20" />
+          </div>
+        </Field>
+        <div className="flex items-center justify-between gap-4 rounded-xl bg-ink-900 p-3">
+          <div><div className="text-sm text-slate-200">Claude Code CLI</div><HelpText>All agents currently run on Claude Code. Turning this off stops new Claude runs.</HelpText></div>
+          <Toggle on={claude} onChange={setClaude} label="Claude Code CLI enabled" />
+        </div>
+        <Field label="Gemini API key (optional, for later)" hint="Only used by agents you switch to Gemini; without a key they fall back to Claude Code. Stored server-side and shown masked.">
+          <input className="input font-mono" type="password" autoComplete="off" placeholder="AIza…" value={gemini} onChange={e => setGemini(e.target.value)} />
+        </Field>
+        {canWrite && <button className="btn-primary"><Save size={15} /> Save</button>}
+      </fieldset>
+    </form>
+  );
+}
+
+function AdvancedSection({ canWrite }: { canWrite: boolean }) {
+  const { data } = useApi<Settings>("/settings");
   const { run } = useToast();
   const [f, setF] = useState<Settings | null>(null);
   useEffect(() => { if (data) setF(data); }, [data]);
-  if (!f) return error ? <ErrorBox message={error} /> : <Skeleton className="h-72" />;
+  if (!f) return null;
   const num = (k: keyof Settings) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: Number(e.target.value) });
-
   async function save(e: React.FormEvent) {
     e.preventDefault();
-    const r = await run(() => api<Settings>("/settings", { method: "PUT", body: {
-      geminiApiKey: f!.geminiApiKey, claudeCliEnabled: f!.claudeCliEnabled, maxConcurrentAgents: f!.maxConcurrentAgents, autoExpireHours: f!.autoExpireHours,
-      maxStepsPerRun: f!.maxStepsPerRun, maxRunTimeoutSeconds: f!.maxRunTimeoutSeconds, dailyTokenBudget: f!.dailyTokenBudget, requireApprovalForHighRisk: f!.requireApprovalForHighRisk,
-    } }), "Settings saved");
-    if (r) setF(r);
+    await run(() => api<Settings>("/settings", { method: "PUT", body: {
+      autoExpireHours: f!.autoExpireHours, maxStepsPerRun: f!.maxStepsPerRun, maxRunTimeoutSeconds: f!.maxRunTimeoutSeconds,
+      dailyTokenBudget: f!.dailyTokenBudget, requireApprovalForHighRisk: f!.requireApprovalForHighRisk,
+    } }), "Advanced settings saved");
   }
-
   return (
-    <form onSubmit={save} className="card space-y-5 p-5">
-      <h2 className="font-semibold text-white">1 · AI Engine & Safety Caps</h2>
-      <fieldset disabled={!canWrite} className="space-y-5">
-        <Field label="Gemini API key" hint="Stored server-side and always returned masked. Leave the masked value to keep the current key.">
-          <input className="input" type="password" autoComplete="off" placeholder="AIza…" value={f.geminiApiKey} onChange={e => setF({ ...f, geminiApiKey: e.target.value })} />
-        </Field>
-        <label className="flex items-center justify-between rounded-lg bg-ink-900 p-3 text-sm">
-          <span><span className="block text-slate-200">Claude CLI mode</span><span className="text-xs text-slate-500">Run Claude Code agents through the local CLI.</span></span>
-          <input type="checkbox" className="h-5 w-5 accent-indigo-500" checked={f.claudeCliEnabled} onChange={e => setF({ ...f, claudeCliEnabled: e.target.checked })} />
-        </label>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Max concurrent agents"><input type="number" min={1} max={50} className="input" value={f.maxConcurrentAgents} onChange={num("maxConcurrentAgents")} /></Field>
-          <Field label="Proposal auto-expire (hours)"><input type="number" min={1} max={720} className="input" value={f.autoExpireHours} onChange={num("autoExpireHours")} /></Field>
-          <Field label="Max steps per run"><input type="number" min={1} max={1000} className="input" value={f.maxStepsPerRun} onChange={num("maxStepsPerRun")} /></Field>
-          <Field label="Max run timeout (s)"><input type="number" min={10} className="input" value={f.maxRunTimeoutSeconds} onChange={num("maxRunTimeoutSeconds")} /></Field>
-          <Field label="Daily token budget"><input type="number" min={0} className="input" value={f.dailyTokenBudget} onChange={num("dailyTokenBudget")} /></Field>
-        </div>
-        <label className="flex items-center justify-between rounded-lg bg-ink-900 p-3 text-sm">
-          <span className="text-slate-200">Always require CEO approval for high-risk actions</span>
-          <input type="checkbox" className="h-5 w-5 accent-indigo-500" checked={f.requireApprovalForHighRisk} onChange={e => setF({ ...f, requireApprovalForHighRisk: e.target.checked })} />
-        </label>
-        {canWrite && <button className="btn-primary"><Save size={15} /> Save settings</button>}
-      </fieldset>
-    </form>
+    <details className="card group p-5">
+      <summary className="cursor-pointer list-none font-semibold text-white">Advanced safety limits <span className="text-xs font-normal text-slate-500">— timeouts, expiry, budgets</span></summary>
+      <form onSubmit={save} className="mt-4">
+        <fieldset disabled={!canWrite} className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Proposal auto-expire (hours)" hint="Undecided proposals expire after this."><input type="number" min={1} max={720} className="input" value={f.autoExpireHours} onChange={num("autoExpireHours")} /></Field>
+            <Field label="Max run timeout (seconds)" hint="Caps each agent's own timeout."><input type="number" min={10} className="input" value={f.maxRunTimeoutSeconds} onChange={num("maxRunTimeoutSeconds")} /></Field>
+            <Field label="Max steps per run"><input type="number" min={1} max={1000} className="input" value={f.maxStepsPerRun} onChange={num("maxStepsPerRun")} /></Field>
+            <Field label="Daily token budget"><input type="number" min={0} className="input" value={f.dailyTokenBudget} onChange={num("dailyTokenBudget")} /></Field>
+          </div>
+          <label className="flex items-center justify-between rounded-xl bg-ink-900 p-3 text-sm">
+            <span className="text-slate-200">Always require CEO approval for high-risk actions</span>
+            <input type="checkbox" className="h-5 w-5 accent-[#d97757]" checked={f.requireApprovalForHighRisk} onChange={e => setF({ ...f, requireApprovalForHighRisk: e.target.checked })} />
+          </label>
+          {canWrite && <button className="btn-ghost"><Save size={15} /> Save advanced settings</button>}
+        </fieldset>
+      </form>
+    </details>
+  );
+}
+
+function HealthRow({ icon: Icon, name, ok, detail }: { icon: typeof Server; name: string; ok: boolean | null; detail: string }) {
+  return (
+    <li className="flex items-center gap-3 py-2.5">
+      <span className="grid h-8 w-8 place-items-center rounded-lg bg-white/5 text-slate-300"><Icon size={15} /></span>
+      <div className="min-w-0 flex-1"><div className="text-sm text-slate-200">{name}</div><div className="truncate text-xs text-slate-500">{detail}</div></div>
+      <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ${ok == null ? "bg-white/10 text-slate-400" : ok ? "bg-emerald-500/15 text-emerald-300" : "bg-rose-500/15 text-rose-300"}`}>
+        <span className={`h-1.5 w-1.5 rounded-full ${ok == null ? "bg-slate-400" : ok ? "bg-emerald-400" : "bg-rose-400"}`} />{ok == null ? "Unknown" : ok ? "Online" : "Offline"}
+      </span>
+    </li>
+  );
+}
+
+function HealthPanel({ canWrite }: { canWrite: boolean }) {
+  const { data: h, error, reload } = useApi<Health>("/system/health", 10000);
+  const { run } = useToast();
+  const seen = (s: string | null) => (s ? `last heartbeat ${timeAgo(s)}` : "no heartbeat yet");
+  async function stop(projectId: number) {
+    if (await run(() => api(`/projects/${projectId}/preview`, { method: "DELETE" }), "Preview stopped")) reload();
+  }
+  return (
+    <aside className="space-y-6">
+      <section className="card p-5">
+        <div className="mb-1 flex items-center justify-between"><h2 className="font-semibold text-white">System health</h2><Activity size={15} className="text-slate-500" /></div>
+        <HelpText>Refreshes every 10 seconds.</HelpText>
+        <ErrorBox message={error} />
+        <ul className="mt-2 divide-y divide-white/5">
+          <HealthRow icon={Server} name="Backend API" ok={error ? false : h ? h.backend.ok : null} detail={h ? `up ${Math.round(h.backend.uptimeSec / 60)} min` : "checking…"} />
+          <HealthRow icon={Database} name="Database (MySQL)" ok={h ? h.database.ok : null} detail="Projects, tasks, approvals" />
+          <HealthRow icon={Workflow} name="Execution worker" ok={h ? h.worker.ok : null} detail={h ? `${seen(h.worker.lastSeen)}${h.worker.info?.activeRuns != null ? ` · ${h.worker.info.activeRuns} active run(s)` : ""}` : "checking…"} />
+          <HealthRow icon={Bot} name="Discord bot" ok={h ? h.bot.ok : null} detail={h ? `${h.bot.info?.user ?? "devenum-bot"} · ${seen(h.bot.lastSeen)}` : "checking…"} />
+          <HealthRow icon={Github} name="GitHub integration" ok={h ? h.github.configured : null} detail={h?.github.configured ? "Token configured" : "Set GITHUB_TOKEN in backend/.env"} />
+        </ul>
+      </section>
+      <section className="card p-5">
+        <h2 className="mb-1 font-semibold text-white">Live previews</h2>
+        <HelpText>Preview servers started from the portal or Discord (ports 5101–5199).</HelpText>
+        {!h?.previews.length ? <p className="mt-3 text-sm text-slate-500">No previews running.</p> : (
+          <ul className="mt-3 space-y-2">
+            {h.previews.map(p => (
+              <li key={p.projectId} className="flex items-center gap-2 rounded-xl bg-white/[0.03] p-2.5 text-sm">
+                <Globe size={14} className="shrink-0 text-emerald-300" />
+                <a href={p.url} target="_blank" rel="noreferrer noopener" className="min-w-0 flex-1 truncate font-mono text-xs text-amber-200/90 hover:underline">{p.slug} · :{p.port}</a>
+                {canWrite && <button className="btn-ghost !px-2 !py-0.5 text-xs" onClick={() => stop(p.projectId)}><Square size={11} /> Stop</button>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </aside>
   );
 }
 

@@ -35,6 +35,9 @@ async function recoverOrphans() {
 
 async function tick() {
   const settings = await loadSettings();
+  // Liveness for the portal's health panel.
+  const beat = { at: new Date().toISOString(), activeRuns: active.size, paused: settings.globalPaused };
+  await prisma.setting.upsert({ where: { key: "heartbeat:worker" }, create: { key: "heartbeat:worker", value: beat }, update: { value: beat } });
 
   // Cancel in-flight runs when the system or the agent gets paused/disabled.
   if (active.size) {

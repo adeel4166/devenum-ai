@@ -83,10 +83,11 @@ export async function executeTask(task: FullTask, runId: number, provider: Provi
     ws = workspacePath(project.slug);
     header.push(`workspace=${ws}`);
     await prepareRepo(ws, `task #${task.id}`);
-    await checkoutTaskBranch(ws, branch);
+    const base = await checkoutTaskBranch(ws, branch, task.parentTaskId ? taskBranch(task.parentTaskId) : "main");
+    if (base !== "main" && base !== branch) header.push(`based on ${base} (follow-up of task #${task.parentTaskId})`);
 
     const feedback = await prisma.approval.findMany({
-      where: { proposal: { taskId: task.id }, decision: { in: ["REJECTED", "CHANGES_REQUESTED"] }, comment: { not: null } },
+      where: { proposal: { taskId: { in: task.parentTaskId ? [task.id, task.parentTaskId] : [task.id] } }, decision: { in: ["REJECTED", "CHANGES_REQUESTED"] }, comment: { not: null } },
       orderBy: { decidedAt: "asc" }, select: { comment: true },
     });
     const prompt = buildPrompt({ agent, manifest, project, task, branch, workspace: ws, provider,

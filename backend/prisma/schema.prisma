@@ -156,6 +156,8 @@ model Project {
   techStack       String
   repoPath        String
   gitBranch       String          @default("main")
+  /// Set by devenum-bot after the first successful GitHub push.
+  githubRepoUrl   String?
   status          ProjectStatus   @default(PLANNING)
   progressPercent Int             @default(0)
   createdAt       DateTime        @default(now())
@@ -174,6 +176,8 @@ model Task {
   priority        Priority   @default(MEDIUM)
   status          TaskStatus @default(BACKLOG)
   dependencies    Json?
+  /// Follow-up of an earlier task (Request Changes): the worker branches from task/<parentTaskId>.
+  parentTaskId    Int?
   outputSummary   String?    @db.Text
   executionTimeMs Int?
   createdAt       DateTime   @default(now())
@@ -211,6 +215,8 @@ model Proposal {
   /// Discord alert bookkeeping (set by devenum-bot).
   discordMessageId  String?
   discordNotifiedAt DateTime?
+  /// When devenum-bot posted the post-merge "Push to GitHub?" card.
+  githubPromptedAt  DateTime?
   createdAt         DateTime       @default(now())
   project           Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   task              Task?          @relation(fields: [taskId], references: [id], onDelete: SetNull)

@@ -33,10 +33,15 @@ export async function branchExists(ws: string, branch: string) {
   return (await run(["git", "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], { cwd: ws })).code === 0;
 }
 
-/** Checks out task/<id>: reuses an existing branch (e.g. after "changes requested"), otherwise branches from main. */
-export async function checkoutTaskBranch(ws: string, branch: string) {
-  if (await branchExists(ws, branch)) await git(ws, "checkout", branch);
-  else await git(ws, "checkout", "-b", branch, "main");
+/**
+ * Checks out task/<id>: reuses an existing branch (e.g. a task re-queued after rejection), otherwise branches from
+ * `base` (the parent task's branch for Request-Changes follow-ups, else main). Returns the base actually used.
+ */
+export async function checkoutTaskBranch(ws: string, branch: string, base = "main"): Promise<string> {
+  if (await branchExists(ws, branch)) { await git(ws, "checkout", branch); return branch; }
+  const from = base !== "main" && (await branchExists(ws, base)) ? base : "main";
+  await git(ws, "checkout", "-b", branch, from);
+  return from;
 }
 
 export interface BranchResult { statusShort: string; commit: string | null; diffStat: string; changedFiles: string[]; insertions: number; deletions: number }

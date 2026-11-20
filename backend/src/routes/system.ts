@@ -4,6 +4,7 @@ import { prisma } from "../db";
 import { requireRole } from "../auth";
 import { audit } from "../audit";
 import { wrap } from "../http";
+import { allPreviews, githubConfigured } from "../services/ops";
 
 export const systemRouter = Router();
 const writers = requireRole("CEO", "ADMIN");
@@ -22,7 +23,8 @@ export const DEFAULT_SETTINGS = {
 type Settings = typeof DEFAULT_SETTINGS;
 
 export async function loadSettings(): Promise<Settings> {
-  const rows = await prisma.setting.findMany();
+  // Only real settings; heartbeat:* rows are service liveness, not configuration.
+  const rows = await prisma.setting.findMany({ where: { key: { in: Object.keys(DEFAULT_SETTINGS) } } });
   const s: Record<string, unknown> = { ...DEFAULT_SETTINGS };
   for (const r of rows) s[r.key] = r.value;
   return s as Settings;
@@ -77,7 +79,7 @@ systemRouter.post("/resume-all", writers, wrap(async (req, res) => {
 
 systemRouter.get("/dashboard", wrap(async (_req, res) => {
   await prisma.proposal.updateMany({ where: { status: "PENDING", expiresAt: { lt: new Date() } }, data: { status: "EXPIRED" } });
-  const [activeProjects, running, idle, pending, projects, activity, proposals, agentCount] = await Promise.all([
+  const [activeProjects, running, idle, pending, projects, activity, proposals, agentCount, completedRuns] = await Promise.all([
     prisma.project.count({ where: { status: { in: ["PLANNING", "IN_PROGRESS", "REVIEW"] } } }),
     prisma.agent.count({ where: { status: "RUNNING" } }),
     prisma.agent.count({ where: { status: "AVAILABLE" } }),
@@ -89,6 +91,33 @@ systemRouter.get("/dashboard", wrap(async (_req, res) => {
       include: { requestingAgent: { select: { name: true } }, project: { select: { name: true } } },
     }),
     prisma.agent.count(),
+    prisma.agentRun.count({ where: { status: "SUCCEEDED" } }),
   ]);
-  res.json({ kpis: { activeProjects, runningAgents: running, idleAgents: idle, pendingApprovals: pending, totalAgents: agentCount }, projects, activity, proposals });
+  res.json({ kpis: { activeProjects, runningAgents: running, idleAgents: idle, pendingApprovals: pending, totalAgents: agentCount, completedRuns }, projects, activity, proposals });
+}));
+
+/** Recent audit events for the live activity feed (the portal renders them as plain-English sentences). */
+systemRouter.get("/activity", wrap(async (req, res) => {
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 40));
+  res.json(await prisma.auditEvent.findMany({ orderBy: { id: "desc" }, take: limit }));
+}));
+
+/** Liveness of backend, worker (heartbeat every poll) and Discord bot (heartbeat every poll). */
+systemRouter.get("/health", wrap(async (_req, res) => {
+  const beats = await prisma.setting.findMany({ where: { key: { in: ["heartbeat:worker", "heartbeat:bot"] } } });
+  const beat = (k: string, maxAgeMs: number) => {
+    const v = beats.find(b => b.key === k)?.value as { at?: string; [k: string]: unknown } | undefined;
+    const at = v?.at ? new Date(v.at) : null;
+    return { ok: !!at && Date.now() - at.getTime() < maxAgeMs, lastSeen: at?.toISOString() ?? null, info: v ?? null };
+  };
+  let database = true;
+  try { await prisma.$queryRaw`SELECT 1`; } catch { database = false; }
+  res.json({
+    backend: { ok: true, uptimeSec: Math.round(process.uptime()) },
+    database: { ok: database },
+    worker: beat("heartbeat:worker", 30_000),
+    bot: beat("heartbeat:bot", 45_000),
+    github: { configured: githubConfigured() },
+    previews: allPreviews(),
+  });
 }));
