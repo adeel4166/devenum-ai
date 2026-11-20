@@ -72,5 +72,5 @@ ${message || "(no text — please analyse the attached file(s))"}
 
 Reply as the ${agent.name}:`;
   // 5 minutes by default so deep-research prompts and document analysis can finish.
-  return withChatSlot(() => askClaude(prompt, Number(process.env.CHAT_TIMEOUT_MS || 300_000), { addDirs: dir ? [dir] : [], allowedTools: CHAT_TOOLS }));
+  return withChatSlot(() => askClaude(prompt, Number(process.env.CHAT_TIMEOUT_MS || 300_000), { addDirs: dir ? [dir] : [], allowedTools: CHAT_TOOLS, model: agent.model }));
 }

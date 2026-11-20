@@ -137,6 +137,8 @@ model Agent {
   roleTitle     String
   department    Department
   modelProvider ModelProvider
+  /// Claude Code model for this agent: alias (opus | sonnet | haiku → latest of that family) or a full model ID.
+  model         String        @default("sonnet")
   status        AgentStatus   @default(AVAILABLE)
   manifest      Json
   currentTaskId Int?

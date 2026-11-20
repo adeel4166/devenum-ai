@@ -47,7 +47,7 @@ export interface RunLite {
   task?: { id: number; title: string } | null; agent?: { name: string; slug?: string };
 }
 export interface Agent {
-  id: number; slug: string; name: string; roleTitle: string; department: string; modelProvider: string;
+  id: number; slug: string; name: string; roleTitle: string; department: string; modelProvider: string; model?: string;
   status: string; manifest: Manifest; currentTaskId: number | null; totalRuns: number;
   currentTask: { id: number; title: string; projectId: number } | null;
   runs?: RunLite[];

@@ -9,6 +9,11 @@ import { AgentDrawer } from "@/components/AgentDrawer";
 import { AssignTaskModal } from "@/components/AssignTaskModal";
 import { AgentAvatar, Badge, CardSkeletons, EmptyState, ErrorBox, PageHeader, providerName } from "@/components/ui";
 
+const MODELS = [
+  { value: "opus", label: "Opus — Deep Thinking", hint: "Planning & architecture · deep reasoning (high effort), falls back to Sonnet" },
+  { value: "sonnet", label: "Sonnet — Coding & Research", hint: "Implementation, design, security, research" },
+  { value: "haiku", label: "Haiku — Fast & Light", hint: "Quick ops, QA and assistance · falls back to Sonnet" },
+];
 const DEPARTMENTS = ["ALL", "LEADERSHIP", "ARCHITECTURE", "DESIGN", "ENGINEERING", "QA_SECURITY", "DEVOPS"];
 
 function statusLine(a: Agent) {
@@ -30,6 +35,12 @@ export default function AgentsPage() {
 
   const agents = useMemo(() => (data ?? []).filter(a => dept === "ALL" || a.department === dept), [data, dept]);
   const working = (data ?? []).filter(a => a.status === "RUNNING").length;
+
+  async function setModel(a: Agent, model: string) {
+    if (model === a.model) return;
+    const m = MODELS.find(x => x.value === model);
+    if (await run(() => api(`/agents/${a.id}`, { method: "PATCH", body: { model } }), `${a.name} now uses ${m?.label.split(" — ")[0] ?? model} — applies from the next task or chat`)) reload();
+  }
 
   async function act(a: Agent, action: "pause" | "resume") {
     if (action === "pause" && a.status === "RUNNING" && !window.confirm(`${a.name} is working right now. Pausing cancels the run and re-queues the task. Continue?`)) return;
@@ -68,6 +79,14 @@ export default function AgentsPage() {
                   </div>
                 </div>
                 <p className="mt-3 line-clamp-3 min-h-[3.75rem] text-sm text-slate-400">{notes || a.roleTitle}</p>
+                <label className="mt-3 block">
+                  <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-slate-500">Claude model</span>
+                  <select className="input !py-1.5 text-xs" value={MODELS.some(m => m.value === a.model) ? a.model : "custom"} disabled={!canWrite}
+                    onChange={e => setModel(a, e.target.value)} title={MODELS.find(m => m.value === a.model)?.hint ?? a.model} aria-label={`${a.name} model`}>
+                    {MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                    {!MODELS.some(m => m.value === a.model) && <option value="custom" disabled>{a.model ?? "default"}</option>}
+                  </select>
+                </label>
                 <p className={`mt-2 truncate text-xs ${s.tone}`}>{s.text}</p>
                 <div className="mt-1 text-[11px] text-slate-500">{a.totalRuns} runs completed</div>
                 <div className="mt-4 flex flex-wrap gap-2 border-t border-white/5 pt-4">

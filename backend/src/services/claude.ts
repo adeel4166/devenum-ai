@@ -14,13 +14,25 @@ const CHAT_MODEL = process.env.CHAT_CLAUDE_MODEL || "";
 /** Extra read-only directories (chat attachment folders) are limited to /tmp/devenum-chat-* to keep access narrow. */
 const ADD_DIR_RE = /^\/tmp\/devenum-chat-\d+(-[a-z0-9]+)?$/;
 
+/**
+ * Per-agent Claude model flags. Aliases resolve to the latest model of that family in Claude Code.
+ * opus → deep reasoning (--effort high) with sonnet fallback; haiku → fast, with sonnet fallback; sonnet → as is.
+ */
+export const MODEL_RE = /^(opus|sonnet|haiku|claude-[a-z0-9.-]{3,60})$/;
+export function modelFlags(model: string | null | undefined): string[] {
+  const m = model && MODEL_RE.test(model) ? model : "";
+  if (!m) return [];
+  const family = /opus/.test(m) ? "opus" : /haiku/.test(m) ? "haiku" : "sonnet";
+  return ["--model", m, ...(family !== "sonnet" ? ["--fallback-model", "sonnet"] : []), ...(family === "opus" ? ["--effort", "high"] : [])];
+}
+
 /** Read-only research toolset for conversations: local reading (scratch + attachment dirs only) plus live web access. */
 export const CHAT_TOOLS = ["Read", "Glob", "Grep", "WebSearch", "WebFetch"];
 
-export async function askClaude(prompt: string, timeoutMs = 60_000, opts: { addDirs?: string[]; allowedTools?: string[] } = {}): Promise<ChatResult> {
+export async function askClaude(prompt: string, timeoutMs = 60_000, opts: { addDirs?: string[]; allowedTools?: string[]; model?: string | null } = {}): Promise<ChatResult> {
   const dirs = (opts.addDirs ?? []).filter(d => ADD_DIR_RE.test(d));
   const tools = (opts.allowedTools ?? []).filter(t => /^[A-Za-z]+$/.test(t));
-  const argv = [CLAUDE_BIN, "-p", "--output-format", "text", ...(CHAT_MODEL ? ["--model", CHAT_MODEL] : []),
+  const argv = [CLAUDE_BIN, "-p", "--output-format", "text", ...modelFlags(opts.model || CHAT_MODEL),
     ...(tools.length ? ["--allowedTools", tools.join(",")] : []), ...(dirs.length ? ["--add-dir", ...dirs] : [])];
   const r = await runScript(`mkdir -p ~/devenum-chat && cd ~/devenum-chat && exec ${argv.map(sq).join(" ")}`, { input: prompt, timeoutMs });
   const out = r.stdout.trim();

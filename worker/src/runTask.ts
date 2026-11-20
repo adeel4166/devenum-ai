@@ -67,7 +67,7 @@ export async function executeTask(task: FullTask, runId: number, provider: Provi
   const manifest = (agent.manifest ?? {}) as Manifest;
   const timeoutSec = Math.max(30, Math.min(Number(manifest.timeoutSeconds) || 1800, settings.maxRunTimeoutSeconds));
   const branch = taskBranch(task.id);
-  const header: string[] = [`${config.logMarker} run #${runId} task #${task.id} "${task.title}"`, `provider=${provider} timeout=${timeoutSec}s branch=${branch}`];
+  const header: string[] = [`${config.logMarker} run #${runId} task #${task.id} "${task.title}"`, `provider=${provider}${provider === "CLAUDE_CODE" ? ` model=${agent.model || config.claudeModel || "default"}` : ""} timeout=${timeoutSec}s branch=${branch}`];
   if (providerNote) header.push(`note: ${providerNote}`);
   let live = "";
   let lastFlush = 0;
@@ -102,7 +102,7 @@ export async function executeTask(task: FullTask, runId: number, provider: Provi
     const onOutput = (s: string) => { live += s; void flush(); };
     result = provider === "GEMINI_API"
       ? await runGemini(prompt, settings.geminiApiKey, ws, task.id, agent.slug, timeoutSec * 1000, signal)
-      : await runClaude(prompt, ws, timeoutSec * 1000, signal, onOutput);
+      : await runClaude(prompt, ws, timeoutSec * 1000, signal, onOutput, agent.model);
 
     // Expired/logged-out Claude CLI: not the agent's fault — re-queue the task and raise the auth alert.
     if (provider === "CLAUDE_CODE" && result.code !== 0 && !result.timedOut && looksLikeAuthError(`${result.stderr}\n${result.stdout}`)) {

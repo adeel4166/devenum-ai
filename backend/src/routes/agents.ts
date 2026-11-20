@@ -61,6 +61,7 @@ agentsRouter.patch("/:id", writers, wrap(async (req, res) => {
   const id = idParam(req);
   const b = z.object({
     modelProvider: z.enum(["CLAUDE_CODE", "GEMINI_API"]).optional(),
+    model: z.string().trim().regex(/^(opus|sonnet|haiku|claude-[a-z0-9.-]{3,60})$/, "Use opus, sonnet, haiku or a full claude-* model ID").optional(),
     status: z.enum(["AVAILABLE", "RUNNING", "WAITING_APPROVAL", "BLOCKED", "PAUSED", "FAILED", "DISABLED"]).optional(),
     roleTitle: z.string().min(2).max(100).optional(),
     name: z.string().min(2).max(100).optional(),
@@ -76,8 +77,8 @@ agentsRouter.patch("/:id", writers, wrap(async (req, res) => {
   });
   await audit("CEO", req.user!.id, "AGENT_UPDATED", `agent:${before.slug}`, {
     changed: Object.keys(b),
-    before: { modelProvider: before.modelProvider, status: before.status, roleTitle: before.roleTitle, manifest: before.manifest },
-    after: { modelProvider: updated.modelProvider, status: updated.status, roleTitle: updated.roleTitle, manifest: updated.manifest },
+    before: { modelProvider: before.modelProvider, model: before.model, status: before.status, roleTitle: before.roleTitle, manifest: before.manifest },
+    after: { modelProvider: updated.modelProvider, model: updated.model, status: updated.status, roleTitle: updated.roleTitle, manifest: updated.manifest },
   } as Prisma.InputJsonObject);
   res.json(updated);
 }));

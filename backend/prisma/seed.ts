@@ -5,6 +5,14 @@ import { Department, ModelProvider, Prisma, PrismaClient } from "@prisma/client"
 const prisma = new PrismaClient();
 const day = 24 * 3600 * 1000;
 
+/** Role-based default Claude models: deep planning → opus, coding/design/security → sonnet, fast ops/QA/assistant → haiku. */
+export const ROLE_MODELS: Record<string, "opus" | "sonnet" | "haiku"> = {
+  "project-manager": "opus", "software-architect": "opus",
+  "ui-ux-designer": "sonnet", "frontend-developer": "sonnet", "backend-developer": "sonnet", "mobile-developer": "sonnet",
+  "game-developer": "sonnet", "security-engineer": "sonnet", "devops-engineer": "sonnet",
+  "qa-engineer": "haiku", "executive-assistant": "haiku",
+};
+
 const COMMON_PROHIBITED = [
   "push to main/master without CEO approval",
   "run destructive shell commands (rm -rf, drop database)",
@@ -70,7 +78,7 @@ async function main() {
     };
     const row = await prisma.agent.upsert({
       where: { slug: a.slug }, update: {},
-      create: { slug: a.slug, name: a.name, roleTitle: a.roleTitle, department: a.department, modelProvider: a.modelProvider, manifest },
+      create: { slug: a.slug, name: a.name, roleTitle: a.roleTitle, department: a.department, modelProvider: a.modelProvider, model: ROLE_MODELS[a.slug] ?? "sonnet", manifest },
     });
     byslug[a.slug] = row.id;
   }

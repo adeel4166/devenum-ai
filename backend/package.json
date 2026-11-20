@@ -12,10 +12,12 @@
     "prisma:deploy": "prisma migrate deploy",
     "seed": "tsx prisma/seed.ts",
     "agents:claude-code": "tsx prisma/agents-claude-code.ts",
+    "agents:models": "tsx prisma/agents-models.ts",
     "db:push": "prisma db push"
   },
   "prisma": { "seed": "tsx prisma/seed.ts",
     "agents:claude-code": "tsx prisma/agents-claude-code.ts",
+    "agents:models": "tsx prisma/agents-models.ts",
     "db:push": "prisma db push" },
   "dependencies": {
     "@prisma/client": "^6.1.0",

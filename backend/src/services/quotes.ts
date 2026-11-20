@@ -21,7 +21,7 @@ const clampNum = (v: unknown, min: number, max: number, dflt: number) => { const
 const strArr = (v: unknown, max = 12) => (Array.isArray(v) ? v.map(x => String(x).trim()).filter(Boolean).slice(0, max) : []);
 
 export async function generateQuote(input: QuoteInput, progress: (m: string) => void): Promise<QuoteResult> {
-  const agents = await prisma.agent.findMany({ where: { slug: { notIn: ["executive-assistant"] } }, select: { slug: true, name: true, roleTitle: true } });
+  const agents = await prisma.agent.findMany({ where: { slug: { notIn: ["executive-assistant"] } }, select: { slug: true, name: true, roleTitle: true, model: true } });
   progress("The Executive Assistant and Software Architect are scoping the project…");
   const prompt = `You are two people at Devenum AI, an AI-powered software house, working together on a client quotation:
 - the Executive Assistant (client-facing: clear scope, assumptions, plain-English summary), and
@@ -47,7 +47,8 @@ Respond with ONLY one JSON object, no prose and no code fences, exactly in this 
  "projectName": "short project name",
  "autoBuildGoal": "one paragraph goal our agents can execute to build the first version (MVP) of this scope"}`;
 
-  const r = await askClaude(prompt, Number(process.env.QUOTE_TIMEOUT_MS || 240_000));
+  // Estimates are the Software Architect's call — run on the architect's model.
+  const r = await askClaude(prompt, Number(process.env.QUOTE_TIMEOUT_MS || 300_000), { model: agents.find(a => a.slug === "software-architect")?.model });
   if (!r.ok) throw new HttpError(502, r.timedOut ? "Quote generation timed out — try shorter requirements" : `Quote generation failed: ${r.text}`);
   const start = r.text.indexOf("{"), end = r.text.lastIndexOf("}");
   let raw: Record<string, unknown>;

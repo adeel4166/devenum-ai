@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "resolveJsonModule": true
   },
-  "include": ["src", "prisma/seed.ts", "prisma/agents-claude-code.ts"]
+  "include": ["src", "prisma/seed.ts", "prisma/agents-claude-code.ts", "prisma/agents-models.ts"]
 }

@@ -6,6 +6,19 @@ import { ExecResult, must, run } from "./exec";
 
 export type Provider = "CLAUDE_CODE" | "GEMINI_API";
 
+/**
+ * Per-agent Claude model flags. Aliases resolve to the latest model of that family in Claude Code.
+ * opus → deep reasoning (--effort high) with sonnet fallback; haiku → fast, with sonnet fallback; sonnet → as is.
+ */
+export const MODEL_RE = /^(opus|sonnet|haiku|claude-[a-z0-9.-]{3,60})$/;
+export function modelFlags(model: string | null | undefined): string[] {
+  const m = model && MODEL_RE.test(model) ? model : "";
+  if (!m) return [];
+  const family = /opus/.test(m) ? "opus" : /haiku/.test(m) ? "haiku" : "sonnet";
+  return ["--model", m, ...(family !== "sonnet" ? ["--fallback-model", "sonnet"] : []), ...(family === "opus" ? ["--effort", "high"] : [])];
+}
+
+
 /** GEMINI_API only when a key is configured; otherwise fall back to Claude Code. */
 export function pickProvider(agent: Agent, settings: Settings): { provider: Provider; note?: string } {
   if (agent.modelProvider === "GEMINI_API") {
@@ -34,7 +47,7 @@ ${list(manifest.allowedTools)}
 Prohibited actions (hard rules, never violate):
 ${list(manifest.prohibitedActions)}
 
-Step budget: at most ${manifest.maxSteps ?? 50} tool steps.${manifest.notes ? `\nRole notes: ${manifest.notes}` : ""}
+Step budget: at most ${manifest.maxSteps ?? 50} tool steps.${/opus/.test(agent.model ?? "") ? "\nThis is a deep-reasoning role: think carefully and plan thoroughly before acting — consider alternatives, trade-offs and edge cases, then execute decisively." : ""}${manifest.notes ? `\nRole notes: ${manifest.notes}` : ""}
 
 ## Workspace rules
 ${canEdit ? `- Your current directory is the project's git repository (${p.workspace}), checked out on branch \`${p.branch}\`.
@@ -79,9 +92,8 @@ export function section(output: string, name: string): string | null {
   return m?.[1].trim() || null;
 }
 
-export async function runClaude(prompt: string, workspace: string, timeoutMs: number, signal: AbortSignal, onOutput: (s: string) => void): Promise<ExecResult> {
-  const argv = [config.claudeBin, "-p", "--output-format", "text", "--dangerously-skip-permissions"];
-  if (config.claudeModel) argv.push("--model", config.claudeModel);
+export async function runClaude(prompt: string, workspace: string, timeoutMs: number, signal: AbortSignal, onOutput: (s: string) => void, model?: string | null): Promise<ExecResult> {
+  const argv = [config.claudeBin, "-p", "--output-format", "text", "--dangerously-skip-permissions", ...modelFlags(model || config.claudeModel)];
   // Prompt goes through stdin, never through the shell command line.
   return run(argv, { cwd: workspace, input: prompt, timeoutMs, signal, onOutput });
 }

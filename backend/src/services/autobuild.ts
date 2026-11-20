@@ -8,7 +8,7 @@ export interface PlannedTask { agentSlug: string; title: string; description: st
 const NON_BUILDERS = new Set(["project-manager", "executive-assistant"]);
 
 /** Asks Claude Code (as the Project Manager, read-only) to split a goal into 3–5 ordered tasks for existing agents. */
-export async function planGoal(project: { name: string; category: string; techStack: string; description: string }, goal: string, agents: AgentRow[]): Promise<PlannedTask[]> {
+export async function planGoal(project: { name: string; category: string; techStack: string; description: string }, goal: string, agents: (AgentRow & { model?: string })[]): Promise<PlannedTask[]> {
   const builders = agents.filter(a => !NON_BUILDERS.has(a.slug) && a.status !== "DISABLED");
   const roster = builders.map(a => `- ${a.slug}: ${a.name} (${a.roleTitle})${(a.manifest as { notes?: string })?.notes ? ` — ${(a.manifest as { notes?: string }).notes}` : ""}`).join("\n");
   const prompt = `You are the Project Manager of Devenum AI, an autonomous software house. Break the CEO's goal into 3 to 5 ordered engineering tasks.
@@ -31,7 +31,8 @@ Respond with ONLY a JSON array, no prose and no code fences, in this exact shape
 [{"agent_slug": "software-architect", "title": "short imperative title", "description": "detailed instructions and acceptance criteria", "priority": "HIGH"}]
 priority is one of LOW, MEDIUM, HIGH, CRITICAL.`;
 
-  const r = await askClaude(prompt, Number(process.env.AUTOBUILD_TIMEOUT_MS || 180_000));
+  // Planned by the Project Manager, on the PM's model (opus → deep reasoning).
+  const r = await askClaude(prompt, Number(process.env.AUTOBUILD_TIMEOUT_MS || 300_000), { model: agents.find(a => a.slug === "project-manager")?.model });
   if (!r.ok) throw new Error(r.timedOut ? "Planning timed out" : `Planning failed: ${r.text}`);
   const start = r.text.indexOf("["), end = r.text.lastIndexOf("]");
   if (start < 0 || end <= start) throw new Error("Planner did not return a JSON task list");
