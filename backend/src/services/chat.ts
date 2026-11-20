@@ -1,7 +1,7 @@
 import { Agent } from "@prisma/client";
 import { prisma } from "../db";
 import { HttpError } from "../http";
-import { askClaude, ChatResult } from "./claude";
+import { askClaude, CHAT_TOOLS, ChatResult } from "./claude";
 
 /**
  * Conversational chat with any agent (default: Executive Assistant), shared by the portal (/api/chat) and Discord
@@ -33,7 +33,8 @@ export function attachmentBlock(files: ChatAttachment[], dir?: string) {
     if (f.text) return `${head}\n${f.text}${f.truncated ? "\n[… content truncated; read the full file at its path if needed]" : ""}\n</file>`;
     return `${head}\n[${f.note ?? "No text extracted"} — read this file directly with your Read tool at the path above.]\n</file>`;
   });
-  return `\nThe user attached ${files.length} file(s)${dir ? `, saved in ${dir} (you may read them with your Read tool)` : ""}. Base your answer on their actual contents:\n${parts.join("\n\n")}\n`;
+  const images = files.filter(f => f.kind === "image").length;
+  return `\nThe user attached ${files.length} item(s)${dir ? `, saved in ${dir} (read them with your Read tool)` : ""}.${images ? ` ${images} of them are images (photos, screenshots or video keyframes): open EVERY image with your Read tool before answering and describe what you actually see.` : ""} Voice notes and video soundtracks were transcribed for you below. Base your answer on the real contents:\n${parts.join("\n\n")}\n`;
 }
 
 export function personaHeader(agent: Agent) {
@@ -43,7 +44,7 @@ ${m.notes ? `Your role: ${m.notes}\n` : ""}${m.allowedTools?.length ? `Your capa
 }
 
 export function chatRules(surface: string) {
-  return `You are chatting with the CEO in ${surface}. Reply conversationally in Markdown${surface === "Discord" ? " (no tables)" : ""}. This is a conversation, not a task run: do not modify files or run commands. If the CEO wants real work done, say which task you (or a teammate) would take on, or suggest asking the Project Manager to plan it — all code changes go through task branches, an automated QA gate, and CEO approval before reaching main. For deep-research or document-analysis requests, be thorough and well structured.`;
+  return `You are chatting with the CEO in ${surface}. Reply conversationally in Markdown${surface === "Discord" ? " (no tables)" : ""}. This is a conversation, not a task run: do not modify files or run commands. If the CEO wants real work done, say which task you (or a teammate) would take on, or suggest asking the Project Manager to plan it — all code changes go through task branches, an automated QA gate, and CEO approval before reaching main. For deep-research or document-analysis requests, be thorough and well structured. You can search the web (WebSearch) and open web pages (WebFetch) for current facts, prices, docs or competitor research — use them whenever freshness matters, and cite the URLs you relied on.`;
 }
 
 export function transcript(turns: ChatTurn[], agentName: string) {
@@ -71,5 +72,5 @@ ${message || "(no text — please analyse the attached file(s))"}
 
 Reply as the ${agent.name}:`;
   // 5 minutes by default so deep-research prompts and document analysis can finish.
-  return withChatSlot(() => askClaude(prompt, Number(process.env.CHAT_TIMEOUT_MS || 300_000), { addDirs: dir ? [dir] : [] }));
+  return withChatSlot(() => askClaude(prompt, Number(process.env.CHAT_TIMEOUT_MS || 300_000), { addDirs: dir ? [dir] : [], allowedTools: CHAT_TOOLS }));
 }

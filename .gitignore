@@ -6,3 +6,5 @@ node_modules/
 workspaces/
 backups/
 deploys/
+# Local toolchains (whisper venv) — reinstall per setup notes
+tools/

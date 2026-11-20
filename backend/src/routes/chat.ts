@@ -10,9 +10,9 @@ export const chatTurns = z.array(z.object({
 
 /** Runs a chat turn as a background job and returns { jobId }; the reply arrives via GET /api/jobs/:id. */
 export const chatAttachments = z.array(z.object({
-  name: z.string().max(200), path: z.string().regex(/^\/tmp\/devenum-chat-\d+(-[a-z0-9]+)?\/[^/]+$/), kind: z.string().max(20),
+  name: z.string().max(260), path: z.string().regex(/^\/tmp\/devenum-chat-\d+(-[a-z0-9]+)?\/[^/]+$/), kind: z.string().max(20),
   size: z.number().int().min(0), text: z.string().max(60_000).optional(), truncated: z.boolean().optional(), note: z.string().max(300).optional(),
-})).max(6).default([]);
+})).max(60).default([]);
 
 export function startChatJob(message: string, history: ChatTurn[], author: string, surface: "Discord" | "the Devenum AI web portal", files: ChatAttachment[] = [], dir?: string, agentSlug?: string) {
   return startJob("chat", async () => {

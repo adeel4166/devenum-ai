@@ -3,7 +3,7 @@ import { prisma } from "../db";
 import { audit } from "../audit";
 import { HttpError } from "../http";
 import { createProject } from "../routes/projects";
-import { askClaude } from "./claude";
+import { askClaude, CHAT_TOOLS } from "./claude";
 import { attachmentBlock, ChatAttachment, chatAgent, chatRules, ChatTurn, personaHeader, transcript, withChatSlot } from "./chat";
 import type { OpsActor } from "./ops";
 
@@ -56,7 +56,7 @@ ${message || "(no text — please analyse the attached file(s))"}
 
 Reply as the ${pm.name}:`;
 
-  const r = await withChatSlot(() => askClaude(prompt, Number(process.env.CHAT_TIMEOUT_MS || 300_000), { addDirs: dir ? [dir] : [] }));
+  const r = await withChatSlot(() => askClaude(prompt, Number(process.env.CHAT_TIMEOUT_MS || 300_000), { addDirs: dir ? [dir] : [], allowedTools: CHAT_TOOLS }));
   if (!r.ok) throw new HttpError(502, r.timedOut ? "The Project Manager ran out of time (5 minute limit). Try a more focused request." : `Claude Code error: ${r.text.slice(0, 300)}`);
 
   const m = r.text.match(PLAN_FENCE);
