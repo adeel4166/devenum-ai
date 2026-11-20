@@ -1,16 +1,21 @@
 import path from "path";
 import dotenv from "dotenv";
 import {
-  ActionRowBuilder, AttachmentBuilder, AutocompleteInteraction, ButtonInteraction, ChatInputCommandInteraction, Client, EmbedBuilder, Events,
+  ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, GuildTextBasedChannel, AutocompleteInteraction, ButtonInteraction, ChatInputCommandInteraction, Client, EmbedBuilder, Events,
   GatewayIntentBits, Interaction, Message, MessageFlags, ModalBuilder, ModalSubmitInteraction, PermissionFlagsBits, REST, Routes,
   SlashCommandBuilder, TextInputBuilder, TextInputStyle,
 } from "discord.js";
 
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
-import { Actor, AgentRow, ApiError, BackendApi, MergedProposal, PreviewInfo } from "./api";
+import { Actor, AgentRow, ApiError, BackendApi, MergedProposal, PreviewInfo, TeamPlan } from "./api";
 import { chat, chunks } from "./chat";
-import { decisionButtons, githubButtons, ids, previewButtons, proposalEmbed, statusEmbed } from "./ui";
+import { BADGE, channelAgent, findAddressedAgent, sendAs, setupTeamChannels } from "./agents";
+import { syncProjects } from "./projectsync";
+import {
+  CORE_SERVICES, decisionButtons, deleteConfirmButtons, deployButtons, githubButtons, ids, previewButtons, proposalEmbed, retryButton,
+  statusEmbed, systemButtons, systemEmbed,
+} from "./ui";
 
 const env = (k: string, required = true) => {
   const v = process.env[k]?.trim() ?? "";
@@ -27,6 +32,7 @@ const POLL_MS = Number(process.env.PROPOSAL_POLL_INTERVAL_MS || 10_000);
 const CHAT_CHANNELS = new Set(env("DISCORD_CHAT_CHANNELS", false).split(",").map(s => s.trim().replace(/^#/, "").toLowerCase()).filter(Boolean));
 // Updated from the backend on every heartbeat (GITHUB_TOKEN lives in backend/.env).
 let githubEnabled = false;
+const TEAM_CATEGORY = process.env.TEAM_CATEGORY_NAME?.trim() || "DEVENUM AI TEAM";
 
 const log = (level: "info" | "warn" | "error", msg: string, extra: Record<string, unknown> = {}) =>
   console[level === "info" ? "log" : level](JSON.stringify({ ts: new Date().toISOString(), level, service: "devenum-bot", msg, ...extra }));
@@ -58,8 +64,11 @@ function buildCommands() {
       .addStringOption(o => o.setName("description").setDescription("Detailed requirements / acceptance criteria").setRequired(false).setMaxLength(4000)),
     new SlashCommandBuilder().setName("status").setDescription("Active projects, running agents and pending approvals"),
     new SlashCommandBuilder().setName("approvals").setDescription("List pending proposals with Approve / Request Changes / Reject buttons"),
-    new SlashCommandBuilder().setName("ask").setDescription("Chat with the Executive Assistant (brainstorming, Q&A, planning)")
-      .addStringOption(o => o.setName("prompt").setDescription("Your question or idea").setRequired(true).setMaxLength(4000)),
+    new SlashCommandBuilder().setName("ask").setDescription("Chat with the Executive Assistant (brainstorming, Q&A, research, document analysis)")
+      .addStringOption(o => o.setName("prompt").setDescription("Your question or idea").setRequired(true).setMaxLength(4000))
+      .addAttachmentOption(o => o.setName("file").setDescription("Optional file: .md .txt .json .csv .pdf .docx").setRequired(false))
+      .addAttachmentOption(o => o.setName("file2").setDescription("Optional second file").setRequired(false))
+      .addAttachmentOption(o => o.setName("file3").setDescription("Optional third file").setRequired(false)),
     new SlashCommandBuilder().setName("github-push").setDescription("Create the GitHub repo (if needed) and push the project's main branch")
       .addIntegerOption(projectOpt)
       .addStringOption(o => o.setName("visibility").setDescription("Repository visibility").setRequired(true)
@@ -71,6 +80,24 @@ function buildCommands() {
       .addIntegerOption(projectOpt)
       .addStringOption(o => o.setName("goal").setDescription("High-level goal, e.g. 'a landing page with signup form and API'").setRequired(true).setMinLength(5).setMaxLength(3000)),
     new SlashCommandBuilder().setName("handoff").setDescription("Queue a task to produce client-ready README, setup guide and .env.example").addIntegerOption(projectOpt),
+    new SlashCommandBuilder().setName("project-delete").setDescription("Delete a project, its records, workspace, preview and live deploy (asks to confirm)").addIntegerOption(projectOpt),
+    new SlashCommandBuilder().setName("deploy").setDescription("Build and deploy a project permanently (PM2 live-<slug>, ports 5201–5299)").addIntegerOption(projectOpt),
+    new SlashCommandBuilder().setName("system").setDescription("VPS CPU / RAM / disk and Devenum service status, with restart buttons"),
+    new SlashCommandBuilder().setName("backup").setDescription("Create a full agency backup (database + workspaces)"),
+    new SlashCommandBuilder().setName("chat-agent").setDescription("Talk directly to a specific agent (replies as that agent)")
+      .addStringOption(o => o.setName("agent").setDescription("Which agent").setRequired(true).setAutocomplete(true))
+      .addStringOption(o => o.setName("prompt").setDescription("Your message").setRequired(true).setMaxLength(4000))
+      .addAttachmentOption(o => o.setName("file").setDescription("Optional file: .md .txt .json .csv .pdf .docx").setRequired(false)),
+    new SlashCommandBuilder().setName("decide").setDescription("Pin a canonical decision to a project (injected into every agent prompt)")
+      .addIntegerOption(projectOpt)
+      .addStringOption(o => o.setName("decision").setDescription("The decision, e.g. 'Use PostgreSQL with Prisma'").setRequired(true).setMaxLength(4000))
+      .addStringOption(o => o.setName("title").setDescription("Short title (default: first words of the decision)").setRequired(false).setMaxLength(190))
+      .addStringOption(o => o.setName("rationale").setDescription("Why").setRequired(false).setMaxLength(2000)),
+    new SlashCommandBuilder().setName("freeze").setDescription("Freeze a project (agents stop working on it, merges are held) — or unfreeze it")
+      .addIntegerOption(projectOpt)
+      .addBooleanOption(o => o.setName("unfreeze").setDescription("Set true to unfreeze").setRequired(false)),
+    new SlashCommandBuilder().setName("report-daily").setDescription("Generate the CEO executive digest now"),
+    new SlashCommandBuilder().setName("setup-channels").setDescription(`Create the team category and one channel per agent (if missing)`),
   ].map(c => c.toJSON());
 }
 
@@ -92,42 +119,122 @@ const errText = (e: unknown) => (e instanceof ApiError ? `Backend: ${e.message}`
 
 const chatError = (e: unknown) => `⚠️ ${e instanceof ApiError ? e.message : (e as Error).message}`.slice(0, 500);
 
+const fileNote = (used: string[], skipped: string[]) =>
+  `${used.length ? `-# 📎 Read: ${used.join(", ")}\n` : ""}${skipped.length ? `-# ⚠️ Skipped: ${skipped.join("; ")}\n` : ""}`;
+
+/** Keeps "Devenum AI is typing…" visible every 8 s while Claude works (up to the 5-minute limit). */
+function keepTyping(channel: { sendTyping: () => Promise<unknown> } | null) {
+  if (!channel) return () => undefined;
+  channel.sendTyping().catch(() => undefined);
+  const t = setInterval(() => channel.sendTyping().catch(() => undefined), 8_000);
+  return () => clearInterval(t);
+}
+
 async function onAsk(i: ChatInputCommandInteraction) {
   const prompt = i.options.getString("prompt", true);
+  const files = ["file", "file2", "file3"].map(n => i.options.getAttachment(n)).filter((a): a is NonNullable<typeof a> => !!a);
   await i.deferReply();
+  const stopTyping = keepTyping(i.channel && "sendTyping" in i.channel ? i.channel : null);
   try {
-    const reply = await chat(api, i.channelId, i.user.username, prompt);
-    const parts = chunks(`> ${prompt.slice(0, 180).replace(/\n/g, " ")}${prompt.length > 180 ? "…" : ""}\n\n${reply}`);
-    await i.editReply(parts[0]);
-    for (const p of parts.slice(1)) await i.followUp(p);
-    log("info", "ask answered", { user: i.user.tag });
+    const r = await chat(api, i.channelId, i.user.username, prompt, files);
+    const parts = chunks(`> ${prompt.slice(0, 180).replace(/\n/g, " ")}${prompt.length > 180 ? "…" : ""}\n${fileNote(r.filesUsed, r.skipped)}\n${r.reply}`);
+    await i.editReply({ content: parts[0], allowedMentions: { parse: [] } });
+    for (const p of parts.slice(1)) await i.followUp({ content: p, allowedMentions: { parse: [] } });
+    log("info", "ask answered", { user: i.user.tag, files: r.filesUsed.length, parts: parts.length });
   } catch (e) {
     await i.editReply(chatError(e));
+  } finally {
+    stopTyping();
   }
 }
 
-/** Direct chat: @mention the bot, or talk in a configured chat channel. Allowed users only. */
+function planEmbed(plan: TeamPlan) {
+  const proj = plan.project.existingProjectId ? `existing project #${plan.project.existingProjectId} **${plan.project.name}**` : `new project **${plan.project.name}** (${plan.project.category}${plan.project.techStack ? ` · ${plan.project.techStack}` : ""})`;
+  return new EmbedBuilder().setColor(0xf59e0b).setTitle(`📋 Team plan #${plan.id}`)
+    .setDescription(`${plan.summary ? `${plan.summary}\n\n` : ""}**Target:** ${proj}`.slice(0, 4000))
+    .addFields(plan.tasks.slice(0, 10).map((t, n) => ({
+      name: `${n + 1}. ${BADGE[t.agentSlug] ?? "🤖"} ${t.agentName} · ${t.priority}`.slice(0, 256),
+      value: `**${t.title}**\n${t.description.replace(/\s+/g, " ").slice(0, 300)}${t.description.length > 300 ? "…" : ""}`.slice(0, 1024),
+    })))
+    .setFooter({ text: "Nothing is created until you approve. Tasks then run one at a time, and every code change still needs your Approve & Merge." });
+}
+const planButtons = (id: number, disabled = false) => new ActionRowBuilder<ButtonBuilder>().addComponents(
+  new ButtonBuilder().setCustomId(ids.make("pm_dispatch", id)).setLabel("Approve & Assign to Team").setEmoji("✅").setStyle(ButtonStyle.Success).setDisabled(disabled),
+  new ButtonBuilder().setCustomId(ids.make("pm_discard", id)).setLabel("Discard plan").setStyle(ButtonStyle.Secondary).setDisabled(disabled),
+);
+
+const pinButton = (projectId: number) => new ActionRowBuilder<ButtonBuilder>().addComponents(
+  new ButtonBuilder().setCustomId(ids.make("pin_decision", projectId)).setLabel("Pin Decision").setEmoji("📌").setStyle(ButtonStyle.Secondary),
+);
+/** #proj-<slug> channels (and their task threads) imply a project; 0 = ask in the modal. */
+const projectChannelIds = new Map<string, number>();
+function projectIdForChannel(channel: GuildTextBasedChannel) {
+  const id = channel.isThread() ? channel.parentId : channel.id;
+  return (id && projectChannelIds.get(id)) || 0;
+}
+
+/** Runs one chat turn with `slug` and posts the answer in `channel` under that agent's own name and avatar. */
+async function agentConversation(channel: GuildTextBasedChannel, slug: string, author: string, text: string, attachments: import("discord.js").Attachment[], quote?: string) {
+  const agents = await getAgents();
+  const agent = agents.find(a => a.slug === slug);
+  if (!agent) throw new Error(`Unknown agent ${slug}`);
+  const stopTyping = keepTyping(channel);
+  try {
+    const r = await chat(api, channel.id, author, text, attachments, slug);
+    const parts = chunks(`${quote ? `> ${quote.slice(0, 180).replace(/\n/g, " ")}${quote.length > 180 ? "…" : ""}\n` : ""}${fileNote(r.filesUsed, r.skipped)}${r.reply}`);
+    const projectHint = projectIdForChannel(channel);
+    await sendAs(channel, agent, client.user!.id, { parts, ...(r.plan ? { embeds: [planEmbed(r.plan)], components: [planButtons(r.plan.id)] } : { components: [pinButton(projectHint)] }) });
+    log("info", "agent replied", { agent: slug, channel: channel.id, files: r.filesUsed.length, parts: parts.length, planId: r.plan?.id ?? null });
+  } finally {
+    stopTyping();
+  }
+}
+
+/**
+ * Direct chat for allowed users. Routing: an @Agent / @Role shorthand (e.g. @PM, @Frontend) wins; otherwise the
+ * channel's agent (#project-manager, #backend-engineering, …); otherwise the Executive Assistant for @Devenum AI
+ * mentions and chat channels (#general / #chat). Messages starting with "/" or "!" are ignored.
+ */
 async function onMessage(m: Message) {
-  if (m.author.bot || !m.inGuild() || m.guildId !== GUILD_ID || !client.user) return;
+  if (m.author.bot || m.webhookId || !m.inGuild() || m.guildId !== GUILD_ID || !client.user) return;
+  const raw = m.content.trim();
+  if (raw.startsWith("/") || raw.startsWith("!")) return;
   const mentioned = m.mentions.users.has(client.user.id);
   const chName = "name" in m.channel ? String(m.channel.name).toLowerCase() : "";
   const inChatChannel = CHAT_CHANNELS.has(m.channelId) || (!!chName && CHAT_CHANNELS.has(chName));
-  if (!mentioned && !inChatChannel) return;
+  const chanSlug = chName ? channelAgent(chName, await getAgents().catch(() => [])) : undefined;
+  let text = raw.replace(new RegExp(`<@!?${client.user.id}>`, "g"), "").trim();
+  const addressed = text.includes("@") ? findAddressedAgent(text, await getAgents().catch(() => [])) : null;
+  if (addressed) text = addressed.text;
+  const slug = addressed?.slug ?? chanSlug ?? (mentioned || inChatChannel ? "executive-assistant" : undefined);
+  if (!slug) return;
   if (!isAuthorizedMessage(m)) return;
-  const text = m.content.replace(new RegExp(`<@!?${client.user.id}>`, "g"), "").trim();
-  if (!text) return void (await m.reply("👋 Ask me anything — brainstorming, technical questions, planning, or prompt polishing."));
-
-  await m.channel.sendTyping().catch(() => undefined);
-  const typing = setInterval(() => m.channel.sendTyping().catch(() => undefined), 8_000);
+  const attachments = [...m.attachments.values()];
+  if (!text && !attachments.length) {
+    if (mentioned || addressed) await m.reply("👋 Ask me anything — or attach a document (.md .txt .json .csv .pdf .docx) to analyse.");
+    return;
+  }
   try {
-    const parts = chunks(await chat(api, m.channelId, m.author.username, text));
-    await m.reply({ content: parts[0], allowedMentions: { repliedUser: false, parse: [] } });
-    for (const p of parts.slice(1)) await m.channel.send({ content: p, allowedMentions: { parse: [] } });
-    log("info", "chat answered", { user: m.author.tag, channel: m.channelId });
+    await agentConversation(m.channel as GuildTextBasedChannel, slug, m.author.username, text, attachments);
   } catch (e) {
     await m.reply({ content: chatError(e), allowedMentions: { repliedUser: false, parse: [] } });
-  } finally {
-    clearInterval(typing);
+  }
+}
+
+async function onChatAgent(i: ChatInputCommandInteraction) {
+  const slug = i.options.getString("agent", true);
+  const prompt = i.options.getString("prompt", true);
+  const file = i.options.getAttachment("file");
+  const agent = (await getAgents()).find(a => a.slug === slug);
+  if (!agent) return i.reply({ content: `❌ Unknown agent \`${slug}\` — pick one from the list.`, flags: MessageFlags.Ephemeral });
+  if (!i.channel || !i.inGuild()) return i.reply({ content: "Use this in a server channel.", flags: MessageFlags.Ephemeral });
+  await i.deferReply({ flags: MessageFlags.Ephemeral });
+  await i.editReply(`${BADGE[slug] ?? "🤖"} Asking **${agent.name}**… the reply will appear in this channel.`);
+  try {
+    await agentConversation(i.channel as GuildTextBasedChannel, slug, i.user.username, prompt, file ? [file] : [], `${i.user.username}: ${prompt}`);
+    await i.editReply(`✅ **${agent.name}** replied below.`);
+  } catch (e) {
+    await i.editReply(chatError(e));
   }
 }
 
@@ -154,6 +261,43 @@ async function onCommand(i: ChatInputCommandInteraction) {
     return i.reply({ content: "⛔ You are not allowed to use Devenum CEO commands.", flags: MessageFlags.Ephemeral });
   }
   if (i.commandName === "ask") return onAsk(i);
+  if (i.commandName === "chat-agent") return onChatAgent(i);
+  if (i.commandName === "decide") {
+    await i.deferReply();
+    try {
+      const decision = i.options.getString("decision", true);
+      const title = i.options.getString("title") ?? decision.split(/\s+/).slice(0, 8).join(" ");
+      const d = await api.pinDecision(i.options.getInteger("project_id", true), { title, decision, rationale: i.options.getString("rationale") ?? undefined }, actorOf(i));
+      await i.editReply(`📌 Decision #${d.id} pinned to **${d.project.name}**: **${d.title}**\n> ${decision.slice(0, 1500)}\n-# Injected into every agent prompt for this project from now on.`);
+    } catch (e) { await i.editReply(`❌ ${errText(e)}`); }
+    return;
+  }
+  if (i.commandName === "freeze") {
+    await i.deferReply();
+    try {
+      const unfreeze = i.options.getBoolean("unfreeze") ?? false;
+      const r = await api.freeze(i.options.getInteger("project_id", true), !unfreeze, actorOf(i));
+      await i.editReply(r.isFrozen ? `❄️ **${r.name}** is frozen — agents stop working on it (running jobs are cancelled and re-queued) and approved merges are held until you unfreeze.` : `🔥 **${r.name}** is unfrozen — work and merges resume.`);
+    } catch (e) { await i.editReply(`❌ ${errText(e)}`); }
+    return;
+  }
+  if (i.commandName === "report-daily") {
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    try { const r = await api.dailyReport(actorOf(i)); await i.editReply(`📊 **${r.title}** generated — posting it to the reports channel now. Also saved in the portal under Reports.`); void poll(); }
+    catch (e) { await i.editReply(`❌ ${errText(e)}`); }
+    return;
+  }
+  if (i.commandName === "setup-channels") {
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      agentCache = null; // pick up agents added since the last refresh
+      const r = await setupTeamChannels(i.guild!, TEAM_CATEGORY, await getAgents());
+      await i.editReply([`**Team channels** (category "${r.category}")`, r.created.length ? `✅ Created: ${r.created.join(", ")}` : "", r.existing.length ? `• Already present: ${r.existing.join(", ")}` : "",
+        r.errors.length ? `⚠️ ${r.errors.join("\n⚠️ ")}` : "", r.canWebhooks ? "🪪 Agent identities: webhooks enabled" : "⚠️ Bot lacks **Manage Webhooks** — agents will reply as the bot with a name header instead of their own avatar.",
+        "", r.channels.map(t => `#${t.name} → ${BADGE[t.slug] ?? "🤖"} ${t.slug}`).join("\n"), "#general → ✨ executive-assistant"].filter(Boolean).join("\n").slice(0, 1990));
+    } catch (e) { await i.editReply(`❌ ${errText(e)}`); }
+    return;
+  }
   const ephemeral = i.commandName === "approvals";
   await i.deferReply(ephemeral ? { flags: MessageFlags.Ephemeral } : {});
   const actor = actorOf(i);
@@ -230,6 +374,30 @@ async function onCommand(i: ChatInputCommandInteraction) {
           .setFooter({ text: "Tasks run one at a time: each starts after the previous step's proposal is approved and merged." })] });
         break;
       }
+      case "project-delete": {
+        const id = i.options.getInteger("project_id", true);
+        const p = await api.project(id);
+        await i.editReply({
+          content: `⚠️ **Delete project #${p.id} "${p.name}"?**\nThis stops its preview and live deploy, deletes all its tasks, proposals, runs and related audit events, and removes the workspace folder \`${p.repoPath}\`. **This cannot be undone.**`,
+          components: [deleteConfirmButtons(p.id)],
+        });
+        break;
+      }
+      case "deploy": {
+        const r = await api.deploy(i.options.getInteger("project_id", true), actor, msg => i.editReply(`⏳ ${msg}`));
+        await i.editReply({ content: `🚀 **${r.projectName} is live** (\`${r.kind}\`, PM2 \`${r.name}\`, port ${r.port}):\n${r.url}\n-# Runs permanently and survives reboots. Make sure ports 5201–5299 are open in the firewall.`, components: [deployButtons(r.projectId, r.url)] });
+        break;
+      }
+      case "system": {
+        await i.editReply({ embeds: [systemEmbed(await api.system())], components: [systemButtons()] });
+        break;
+      }
+      case "backup": {
+        await i.editReply("⏳ Creating a full backup (database + workspaces)…");
+        const r = await api.backup(actor, msg => i.editReply(`⏳ ${msg}`));
+        await i.editReply(`✅ Backup **${r.name}** created (${(r.bytes / 1048576).toFixed(1)} MB).\nDownload it from the portal: **Settings → Backups**. It is not attached here because it contains the database and project secrets.`);
+        break;
+      }
       case "handoff": {
         const t = await api.handoff(i.options.getInteger("project_id", true), actor);
         await i.editReply({ embeds: [new EmbedBuilder().setColor(0x0ea5e9).setTitle(`📘 Hand-off task #${t.id} queued for ${t.project.name}`)
@@ -246,7 +414,7 @@ async function onCommand(i: ChatInputCommandInteraction) {
 }
 
 async function onAutocomplete(i: AutocompleteInteraction) {
-  if (i.commandName !== "task-add") return;
+  if (i.commandName !== "task-add" && i.commandName !== "chat-agent") return;
   const q = i.options.getFocused().toLowerCase();
   const rows = await getAgents().catch(() => [] as AgentRow[]);
   await i.respond(rows
@@ -313,6 +481,71 @@ async function onButton(i: ButtonInteraction) {
       }
       return;
     }
+    case "task_retry": {
+      try {
+        const t = await api.retryTask(id, actor);
+        await i.update({ content: `${i.message.content}\n🔁 Re-queued by <@${i.user.id}> — task #${t.id} is READY and continues on its branch.`, components: [retryButton(id, true)] });
+      } catch (e) { await i.reply({ content: `❌ ${errText(e)}`, flags: MessageFlags.Ephemeral }); }
+      return;
+    }
+    case "project_delete_cancel":
+      await i.update({ content: `${i.message.content}\n✋ Cancelled.`, components: [deleteConfirmButtons(id, true)] });
+      return;
+    case "project_delete_confirm": {
+      await i.update({ content: `${i.message.content}\n⏳ Deleting…`, components: [deleteConfirmButtons(id, true)] });
+      try {
+        const r = await api.deleteProject(id, actor);
+        await i.followUp(`🗑 **${r.name}** deleted — ${r.tasks} task(s), ${r.proposals} proposal(s)${r.workspaceRemoved ? ", workspace removed" : ""}.`);
+      } catch (e) { await i.followUp(`❌ ${errText(e)}`.slice(0, 1900)); }
+      return;
+    }
+    case "deploy_stop": {
+      try {
+        const r = await api.deployStop(id, actor);
+        await i.update({ content: `${i.message.content}\n⏹ ${r.stopped ? `\`${r.name}\` stopped` : "Was not running"} (by <@${i.user.id}>).`, components: [] });
+      } catch (e) { await i.reply({ content: `❌ ${errText(e)}`, flags: MessageFlags.Ephemeral }); }
+      return;
+    }
+    case "sys_restart": {
+      const name = CORE_SERVICES[id - 1];
+      if (!name) return;
+      try {
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const r = await api.restartService(name, actor);
+        await i.editReply(`🔄 \`${r.name}\` is restarting${name === "devenum-bot" ? " — I'll be back in a few seconds" : ""}.`);
+      } catch (e) { await i.editReply(`❌ ${errText(e)}`).catch(() => undefined); }
+      return;
+    }
+    case "pm_dispatch": {
+      await i.update({ components: [planButtons(id, true)] });
+      try {
+        const r = await api.dispatchPlan(id, actor);
+        const pm = (await getAgents()).find(a => a.slug === "project-manager");
+        const lines = r.tasks.map((t, n) => `${n + 1}. ${BADGE[t.agentSlug] ?? "🤖"} **${t.agent}** — task #${t.id}: ${t.title}`).join("\n");
+        const msg = `✅ Approved by <@${i.user.id}>. Project **#${r.project.id} ${r.project.name}** — ${r.tasks.length} tasks assigned:\n${lines}\n\nStep 1 starts as soon as its agent is free; each next step starts after you approve & merge the previous one. Proposals will arrive in the approvals channel.`;
+        if (pm && i.channel && i.inGuild()) await sendAs(i.channel as GuildTextBasedChannel, pm, client.user!.id, { parts: chunks(msg) });
+        else await i.followUp(msg.slice(0, 1900));
+        log("info", "team plan dispatched", { planId: id, projectId: r.project.id, tasks: r.tasks.length });
+      } catch (e) {
+        await i.followUp({ content: `❌ ${errText(e)}`, flags: MessageFlags.Ephemeral });
+        if (!(e instanceof ApiError && e.status === 409)) await i.message.edit({ components: [planButtons(id)] }).catch(() => undefined);
+      }
+      return;
+    }
+    case "pin_decision": {
+      const modal = new ModalBuilder().setCustomId(ids.make("pin_decision_modal", id)).setTitle("Pin as project decision").addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("project_id").setLabel("Project ID").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(10).setValue(id ? String(id) : "")),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("title").setLabel("Decision title").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(190)),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("decision").setLabel("Decision (edit to the canonical rule)").setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(4000)
+          .setValue((i.message.content || "").replace(/^-# .*\n/gm, "").replace(/^\*\*.*\*\*\n/, "").trim().slice(0, 4000) || " ")),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("rationale").setLabel("Rationale (optional)").setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(2000)),
+      );
+      return i.showModal(modal);
+    }
+    case "pm_discard":
+      try { await api.discardPlan(id, actor); await i.update({ components: [planButtons(id, true)], content: `${i.message.content ?? ""}\n🗑 Plan discarded by <@${i.user.id}>.`.slice(0, 2000) }); }
+      catch (e) { await i.reply({ content: `❌ ${errText(e)}`, flags: MessageFlags.Ephemeral }); }
+      return;
     case "preview_stop": {
       const r = await api.stopPreview(id, actor).catch(() => ({ stopped: false }));
       await i.update({ content: `${i.message.content}\n⏹ ${r.stopped ? "Preview stopped" : "Preview was not running"} (by <@${i.user.id}>).`, components: [] });
@@ -332,6 +565,11 @@ async function onModal(i: ModalSubmitInteraction) {
       await api.reject(parsed.id, actor, reason || undefined);
       log("info", "proposal rejected", { proposalId: parsed.id, by: i.user.tag });
       await markDecided(i, parsed.id, `❌ Rejected by <@${i.user.id}>${reason ? `: ${reason.slice(0, 900)}` : ""}`, 0xef4444);
+    } else if (parsed.action === "pin_decision_modal") {
+      const pid = Number(i.fields.getTextInputValue("project_id").trim());
+      if (!Number.isInteger(pid) || pid <= 0) return void (await i.reply({ content: "❌ Enter a valid project ID (see /status).", flags: MessageFlags.Ephemeral }));
+      const d = await api.pinDecision(pid, { title: i.fields.getTextInputValue("title").trim(), decision: i.fields.getTextInputValue("decision").trim(), rationale: i.fields.getTextInputValue("rationale").trim() || undefined }, actor);
+      await i.reply({ content: `📌 Pinned decision #${d.id} to **${d.project.name}**: **${d.title}** — agents will follow it on every task for this project.`, allowedMentions: { parse: [] } });
     } else if (parsed.action === "proposal_revise_modal") {
       const r = await api.revise(parsed.id, reason, actor);
       log("info", "changes requested", { proposalId: parsed.id, followUpTaskId: r.followUpTaskId, by: i.user.tag });
@@ -341,6 +579,20 @@ async function onModal(i: ModalSubmitInteraction) {
 }
 
 /* ------------------------------------------------------------------ pollers */
+
+/** Posts generated executive reports to #executive-reports (or #general). */
+async function postReports(guild: import("discord.js").Guild) {
+  const reports = await api.unpostedReports();
+  if (!reports.length) return;
+  const chans = await guild.channels.fetch();
+  const target = (chans.find(c => c?.type === 0 && c.name === "executive-reports") ?? chans.find(c => c?.type === 0 && c.name === "general")) as import("discord.js").TextChannel | undefined;
+  if (!target) return;
+  for (const r of reports) {
+    for (const part of chunks(r.body.replace(/^# (.*)$/m, "## $1"))) await target.send({ content: part, allowedMentions: { parse: [] } });
+    await api.markReportPosted(r.id);
+    log("info", "report posted", { reportId: r.id, channel: target.name });
+  }
+}
 
 let polling = false;
 async function approvalChannel() {
@@ -365,15 +617,32 @@ async function poll() {
   if (polling) return;
   polling = true;
   try {
+    const guild = client.guilds.cache.get(GUILD_ID);
+    if (guild) {
+      await syncProjects(guild, api, log).catch(e => log("warn", "project sync failed", { error: (e as Error).message }));
+      const map = await api.projectChannels().catch(() => []);
+      projectChannelIds.clear();
+      for (const p of map) if (p.discordChannelId) projectChannelIds.set(p.discordChannelId, p.id);
+      await postReports(guild).catch(e => log("warn", "report post failed", { error: (e as Error).message }));
+    }
     const hb = await api.heartbeat(client.user?.tag ?? "devenum-bot");
     githubEnabled = hb.github;
-    const [proposals, merges] = await Promise.all([api.unnotifiedProposals(), api.unpromptedMerges()]);
-    if (!proposals.length && !merges.length) return;
+    const [proposals, merges, timeouts] = await Promise.all([api.unnotifiedProposals(), api.unpromptedMerges(), api.timeoutAlerts()]);
+    if (!proposals.length && !merges.length && !timeouts.length) return;
     const channel = await approvalChannel();
     for (const p of proposals) {
       const msg = await channel.send({ content: `🔔 **New proposal awaiting CEO approval** — ${p.riskLevel} risk`, embeds: [proposalEmbed(p)], components: [decisionButtons(p.id)] });
       await api.markNotified(p.id, msg.id);
       log("info", "proposal announced", { proposalId: p.id, messageId: msg.id });
+    }
+    for (const t of timeouts) {
+      const task = t.task;
+      await channel.send({
+        content: `⏱ **Watchdog: run timed out** — ${t.agent.name}${task ? ` on task #${task.id} "${task.title}" (${task.project.name})` : ""}.\n${(t.errorMessage ?? "").slice(0, 300)}\nThe process was terminated, the agent is available again and partial work is kept on its branch.`,
+        components: task ? [retryButton(task.id)] : [],
+      });
+      await api.markAlerted(t.id);
+      log("info", "timeout alert sent", { runId: t.id, taskId: task?.id });
     }
     for (const m of merges) {
       await channel.send(mergeCard(m));
@@ -409,6 +678,20 @@ function wire(c: Client) {
     } catch (e) {
       log("error", "command registration failed", { error: (e as Error).message });
     }
+    const guild = ready.guilds.cache.get(GUILD_ID) ?? await ready.guilds.fetch(GUILD_ID).catch(() => null);
+    // Sync agent channels now, then every 30 min so newly added agents get their channel without a restart.
+    let lastSyncLog = "";
+    const syncTeam = async () => {
+      if (!guild) return;
+      try {
+        const r = await setupTeamChannels(guild, TEAM_CATEGORY, await getAgents());
+        const sig = JSON.stringify([r.created, r.errors, r.canWebhooks]);
+        if (r.created.length || sig !== lastSyncLog) log(r.errors.length ? "warn" : "info", "team channels", { agents: r.channels.length, created: r.created, existing: r.existing, errors: r.errors, webhooks: r.canWebhooks });
+        lastSyncLog = sig;
+      } catch (e) { log("warn", "team channel setup failed", { error: (e as Error).message }); }
+    };
+    setInterval(() => void syncTeam(), 30 * 60_000).unref();
+    void syncTeam();
     void poll();
     if (!pollTimer) pollTimer = setInterval(() => void poll(), POLL_MS);
   });

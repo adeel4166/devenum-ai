@@ -18,7 +18,7 @@ export function humanize(e: AuditEvent): FeedItem {
   const base = { id: e.id, at: e.createdAt };
   switch (e.action) {
     case "TASK_RUN_STARTED": return { ...base, tone: "agent", text: `${slugName(String(d.agent))} started working on task #${task}`, detail: d.provider === "GEMINI_API" ? "via Gemini" : "via Claude Code" };
-    case "PROPOSAL_SUBMITTED": return { ...base, tone: "agent", text: `${who(e)} finished and submitted proposal #${proposal} for approval`, detail: [d.branch && `branch ${d.branch}`, d.changedFiles != null && `${d.changedFiles} files changed`, d.riskLevel && `${String(d.riskLevel).toLowerCase()} risk`].filter(Boolean).join(" · "), href: "/approvals" };
+    case "PROPOSAL_SUBMITTED": return { ...base, tone: "agent", text: `${who(e)} finished and submitted proposal #${proposal} for approval`, detail: [d.branch && `branch ${d.branch}`, d.changedFiles != null && `${d.changedFiles} files changed`, d.riskLevel && `${String(d.riskLevel).toLowerCase()} risk`, d.qa && `QA ${d.qa}`].filter(Boolean).join(" · "), href: "/approvals" };
     case "PROPOSAL_APPROVED": return { ...base, tone: "success", text: `${who(e)} approved proposal #${proposal}`, detail: d.branchName ? `merging ${d.branchName} into main` : undefined, href: "/approvals" };
     case "PROPOSAL_REJECTED": return { ...base, tone: "danger", text: `${who(e)} rejected proposal #${proposal}`, detail: typeof d.comment === "string" ? d.comment.slice(0, 140) : undefined, href: "/approvals" };
     case "PROPOSAL_CHANGES_REQUESTED": return { ...base, tone: "warning", text: `${who(e)} requested changes on proposal #${proposal}`, href: "/approvals" };
@@ -27,6 +27,18 @@ export function humanize(e: AuditEvent): FeedItem {
     case "TASK_BRANCH_MERGE_FAILED": return { ...base, tone: "danger", text: `Merge of ${d.branch ?? "a task branch"} failed — needs attention`, detail: typeof d.error === "string" ? d.error.slice(0, 140) : undefined };
     case "TASK_RUN_FAILED": return { ...base, tone: "danger", text: `${slugName(String(d.agent))} could not finish task #${task}`, detail: typeof d.error === "string" ? d.error.slice(0, 140) : undefined };
     case "TASK_RUN_CANCELLED": return { ...base, tone: "warning", text: `Run for task #${task} was cancelled and re-queued` };
+    case "TASK_RUN_TIMED_OUT": return { ...base, tone: "danger", text: `Watchdog stopped a hung run on task #${task} — retry needed`, detail: d.watchdog ? "stale run healed" : "timed out; partial work kept on its branch" };
+    case "TASK_RETRY_REQUESTED": return { ...base, tone: "ceo", text: `${who(e)} re-queued task #${task}` };
+    case "PROJECT_DELETED": return { ...base, tone: "danger", text: `${who(e)} deleted project ${d.name ?? project}`, detail: d.tasks != null ? `${d.tasks} tasks, ${d.proposals} proposals removed` : undefined };
+    case "PROJECT_DEPLOYED": return { ...base, tone: "success", text: `${who(e)} deployed ${project} live`, detail: typeof d.url === "string" ? d.url : undefined };
+    case "DEPLOY_STOPPED": return { ...base, tone: "system", text: `${who(e)} stopped the live deploy of ${project}` };
+    case "BACKUP_CREATED": return { ...base, tone: "success", text: `${who(e)} created a full agency backup`, detail: typeof d.bytes === "number" ? `${(d.bytes / 1048576).toFixed(1)} MB` : undefined };
+    case "BACKUP_DOWNLOADED": return { ...base, tone: "system", text: `${who(e)} downloaded a backup` };
+    case "SERVICE_RESTARTED": return { ...base, tone: "system", text: `${who(e)} restarted ${e.target?.replace("service:", "")}` };
+    case "PROJECT_ENV_UPDATED": return { ...base, tone: "system", text: `${who(e)} updated environment variables of ${project}`, detail: Array.isArray(d.keys) ? `${d.keys.length} variable(s)` : undefined };
+    case "FILE_EDITED": return { ...base, tone: "ceo", text: `${who(e)} edited ${d.path ?? "a file"} in ${project}`, detail: typeof d.commit === "string" ? `commit ${d.commit.slice(0, 8)}` : undefined };
+    case "QUOTE_CREATED": return { ...base, tone: "ceo", text: `${who(e)} generated a quote for ${d.client ?? "a client"}`, detail: d.total != null ? `${d.currency ?? ""} ${Number(d.total).toLocaleString()}` : undefined, href: "/quotes" };
+    case "QUOTE_CONVERTED": return { ...base, tone: "success", text: `${who(e)} converted a quote into project #${d.projectId}`, href: `/projects/${d.projectId}` };
     case "TASK_RUN_ORPHANED": return { ...base, tone: "warning", text: `A run for task #${task} was interrupted by a worker restart` };
     case "TASK_CREATED": return { ...base, tone: "ceo", text: `${who(e)} created task #${task}${d.title ? `: ${d.title}` : ""}` };
     case "TASK_UPDATED": return { ...base, tone: "ceo", text: `${who(e)} updated task #${task}` };

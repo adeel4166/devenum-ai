@@ -14,9 +14,10 @@ const TONES: Record<string, string> = {
   CRITICAL: "bg-fuchsia-500/20 text-fuchsia-300", SUCCEEDED: "bg-emerald-500/15 text-emerald-300",
   QUEUED: "bg-slate-500/20 text-slate-300", CANCELLED: "bg-slate-500/20 text-slate-300",
   APPROVED: "bg-emerald-500/15 text-emerald-300", REJECTED: "bg-rose-500/15 text-rose-300",
-  CHANGES_REQUESTED: "bg-amber-500/15 text-amber-300", PENDING: "bg-amber-500/15 text-amber-300",
+  CHANGES_REQUESTED: "bg-amber-500/15 text-amber-300", INVALIDATED: "bg-rose-500/20 text-rose-200", PENDING: "bg-amber-500/15 text-amber-300",
   EXPIRED: "bg-slate-500/20 text-slate-400", DONE: "bg-emerald-500/15 text-emerald-300", COMPLETED: "bg-emerald-500/15 text-emerald-300",
   IN_PROGRESS: "bg-sky-500/15 text-sky-300", IN_REVIEW: "bg-violet-500/15 text-violet-300", REVIEW: "bg-violet-500/15 text-violet-300",
+  NEEDS_RETRY: "bg-orange-500/15 text-orange-300", TIMED_OUT: "bg-orange-500/15 text-orange-300",
   PLANNING: "bg-slate-500/20 text-slate-300", FROZEN: "bg-cyan-500/15 text-cyan-300", READY: "bg-indigo-500/15 text-indigo-300", BACKLOG: "bg-slate-500/20 text-slate-300",
 };
 const DOTS: Record<string, string> = {
@@ -211,3 +212,51 @@ export const RISK_TONE: Record<string, string> = {
   MEDIUM: "border-amber-500/30 bg-amber-500/10 text-amber-300",
   HIGH: "border-rose-500/30 bg-rose-500/10 text-rose-300",
 };
+
+/** "QA Passed" / "QA Warning" badge from the automated pre-approval gate. */
+export function QaBadge({ qa, compact }: { qa?: { status: string; score: number } | null; compact?: boolean }) {
+  if (!qa) return compact ? null : <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-slate-500">No QA</span>;
+  const ok = qa.status === "PASSED";
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${ok ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : "border-amber-500/40 bg-amber-500/10 text-amber-300"}`}>
+      {ok ? "✓ QA Passed" : "⚠ QA Warning"} <span className="tabular-nums opacity-80">{qa.score}</span>
+    </span>
+  );
+}
+
+const dur = (ms: number) => { if (ms < 60_000) return `${Math.max(0, Math.round(ms / 1000))}s`; const m = Math.round(ms / 60_000); return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`; };
+
+/** Queue wait vs active AI work vs CEO review wait for one task. */
+export function TimeBreakdown({ t }: { t: { createdAt: string; queuedAt?: string | null; startedAt?: string | null; completedAt?: string | null; approvedAt?: string | null } }) {
+  const q = t.queuedAt ?? t.createdAt;
+  const ms = (a?: string | null, b?: string | null) => (a && b ? new Date(b).getTime() - new Date(a).getTime() : null);
+  const rows = [
+    { label: "Queue wait", v: ms(q, t.startedAt), hint: "READY → agent started", tone: "text-indigo-300" },
+    { label: "Active AI work", v: ms(t.startedAt, t.completedAt), hint: "started → finished", tone: "text-sky-300" },
+    { label: "CEO review wait", v: ms(t.completedAt, t.approvedAt), hint: "finished → approved", tone: "text-amber-300" },
+  ];
+  return (
+    <div className="grid grid-cols-3 gap-2 rounded-xl border border-white/5 bg-black/20 p-3">
+      {rows.map(r => (
+        <div key={r.label} title={r.hint}>
+          <div className="text-[10px] uppercase tracking-wide text-slate-500">{r.label}</div>
+          <div className={`text-sm font-semibold tabular-nums ${r.v == null ? "text-slate-600" : r.tone}`}>{r.v == null ? "—" : dur(r.v)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Live countdown to a proposal's expiry. */
+export function ExpiryBadge({ expiresAt, status }: { expiresAt: string; status: string }) {
+  if (status !== "PENDING") return null;
+  const left = new Date(expiresAt).getTime() - Date.now();
+  const tone = left <= 0 ? "border-rose-500/40 text-rose-300" : left < 3 * 3600_000 ? "border-amber-500/40 text-amber-300" : "border-white/10 text-slate-400";
+  return <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${tone}`} title={`Expires ${new Date(expiresAt).toLocaleString()}`}>⏳ {left <= 0 ? "expired" : `expires in ${dur(left)}`}</span>;
+}
+
+export function HashBadge({ hash, head, status }: { hash?: string | null; head?: string | null; status: string }) {
+  if (status === "INVALIDATED") return <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[10px] text-rose-200">⛔ Hash mismatch — invalidated</span>;
+  if (!hash) return null;
+  return <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 px-2 py-0.5 font-mono text-[10px] text-emerald-300/90" title={`Payload hash ${hash}\nHead ${head ?? "?"}\nRe-verified at approval and merge`}>🔒 {hash.slice(0, 10)}</span>;
+}

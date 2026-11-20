@@ -13,7 +13,9 @@ import { approvalsRouter, proposalsRouter } from "./routes/approvals";
 import { botRouter } from "./routes/bot";
 import { requireServiceToken } from "./serviceAuth";
 import { chatRouter, jobsRouter } from "./routes/chat";
+import { analyticsRouter, quotesRouter, reportsRouter, runsRouter, systemOpsRouter } from "./routes/ops";
 import { restorePreviews } from "./services/preview";
+import { agentAvatarPng } from "./services/avatar";
 import { logsRouter } from "./routes/logs";
 import { systemRouter } from "./routes/system";
 
@@ -25,6 +27,12 @@ app.use(cors({ origin: (process.env.CORS_ORIGIN || "http://localhost:4201").spli
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/health", (_req, res) => res.json({ ok: true, service: "devenum-backend" }));
+// Public agent avatars for Discord webhooks (served at https://<host>/api/avatars/<slug>.png through nginx).
+app.get("/avatars/:file", (req, res) => {
+  const m = /^([a-z0-9][a-z0-9-]{0,60})\.png$/.exec(String(req.params.file));
+  if (!m) return res.status(404).end();
+  res.set({ "Content-Type": "image/png", "Cache-Control": "public, max-age=86400", "Cross-Origin-Resource-Policy": "cross-origin" }).send(agentAvatarPng(m[1]));
+});
 app.use("/api/auth", authRouter);
 app.use("/api/users", requireAuth, usersRouter);
 app.use("/api/agents", requireAuth, agentsRouter);
@@ -34,6 +42,11 @@ app.use("/api/approvals", requireAuth, approvalsRouter);
 app.use("/api/proposals", requireAuth, proposalsRouter);
 app.use("/api/chat", requireAuth, chatRouter);
 app.use("/api/jobs", requireAuth, jobsRouter);
+app.use("/api/runs", requireAuth, runsRouter);
+app.use("/api/quotes", requireAuth, quotesRouter);
+app.use("/api/analytics", requireAuth, analyticsRouter);
+app.use("/api/reports", requireAuth, reportsRouter);
+app.use("/api/system", requireAuth, systemOpsRouter);
 // Internal service API for devenum-bot (shared BOT_SERVICE_TOKEN, not a user JWT).
 app.use("/api/bot", requireServiceToken, botRouter);
 app.use("/api/logs", requireAuth, logsRouter);

@@ -6,10 +6,11 @@ import { requireRole } from "../auth";
 import { audit } from "../audit";
 import { HttpError, idParam, wrap } from "../http";
 import { loadSettings } from "./system";
+import { retryTask } from "../services/ops";
 
 export const tasksRouter = Router();
 const writers = requireRole("CEO", "ADMIN");
-const STATUSES = ["BACKLOG", "READY", "AWAITING_APPROVAL", "IN_PROGRESS", "BLOCKED", "IN_REVIEW", "DONE"] as const;
+const STATUSES = ["BACKLOG", "READY", "AWAITING_APPROVAL", "IN_PROGRESS", "BLOCKED", "IN_REVIEW", "DONE", "NEEDS_RETRY"] as const;
 const PRIORITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
 
 const agentSel = { id: true, name: true, slug: true, status: true } as const;
@@ -67,7 +68,8 @@ tasksRouter.patch("/:id", writers, wrap(async (req, res) => {
   const before = await prisma.task.findUnique({ where: { id } });
   if (!before) throw new HttpError(404, "Task not found");
   if (b.assignedAgentId && !(await prisma.agent.findUnique({ where: { id: b.assignedAgentId } }))) throw new HttpError(404, "Agent not found");
-  const t = await prisma.task.update({ where: { id }, data: b });
+  const requeue = b.status === "READY" && before.status !== "READY";
+  const t = await prisma.task.update({ where: { id }, data: { ...b, ...(requeue ? { queuedAt: new Date(), startedAt: null, completedAt: null, approvedAt: null } : {}) } });
   await audit("CEO", req.user!.id, "TASK_UPDATED", `task:${id}`, {
     changed: b, before: { status: before.status, priority: before.priority, assignedAgentId: before.assignedAgentId },
   } as Prisma.InputJsonObject);
@@ -84,6 +86,11 @@ tasksRouter.delete("/:id", writers, wrap(async (req, res) => {
     await audit("CEO", req.user!.id, "TASK_DELETED", `task:${id}`, { title: t.title, status: t.status }, tx);
   });
   res.json({ ok: true });
+}));
+
+/** Retry a timed-out / blocked task (Watchdog "Retry Task"). */
+tasksRouter.post("/:id/retry", writers, wrap(async (req, res) => {
+  res.json(await retryTask(idParam(req), { actorType: "CEO", actorId: String(req.user!.id), approverId: req.user!.id }));
 }));
 
 /* ---------------- Agent run simulation ---------------- */

@@ -2,6 +2,7 @@ import { ActorType, Decision } from "@prisma/client";
 import { prisma } from "./db";
 import { audit } from "./audit";
 import { HttpError } from "./http";
+import { currentPayloadHash } from "./services/payloadHash";
 
 export interface DecisionActor {
   /** User row that the Approval is attributed to (the CEO). */
@@ -20,6 +21,24 @@ export interface DecisionActor {
 export async function decideProposal(id: number, decision: Decision, actor: DecisionActor, comment?: string) {
   if (decision !== "APPROVED" && !comment?.trim()) throw new HttpError(400, "A comment is required for reject / request changes");
 
+  // Tamper-proof approvals: the branch must still be exactly what the agent submitted and the QA gate checked.
+  if (decision === "APPROVED") {
+    const p = await prisma.proposal.findUnique({ where: { id }, include: { project: true } });
+    if (p?.status === "PENDING" && p.payloadHash && p.branchName) {
+      let reason: string | null = null;
+      try {
+        const now = await currentPayloadHash(p.project.slug, p.branchName);
+        if (now.hash !== p.payloadHash) reason = `branch ${p.branchName} changed after it was submitted (reviewed ${p.headCommit?.slice(0, 10) ?? "?"}, now ${now.head.slice(0, 10)})`;
+      } catch (e) { reason = `the payload could not be verified (${(e as Error).message.slice(0, 200)})`; }
+      if (reason) {
+        await prisma.proposal.updateMany({ where: { id, status: "PENDING" }, data: { status: "INVALIDATED" } });
+        if (p.taskId) await prisma.task.update({ where: { id: p.taskId }, data: { status: "BLOCKED", outputSummary: `Proposal #${id} was invalidated: ${reason}. Retry the task to produce a fresh proposal.` } });
+        await audit(actor.actorType, actor.actorId, "PROPOSAL_INVALIDATED", `proposal:${id}`, { reason, ...(actor.context ?? {}) });
+        throw new HttpError(409, `Approval blocked — ${reason}. The proposal has been marked INVALIDATED.`);
+      }
+    }
+  }
+
   return prisma.$transaction(async tx => {
     const p = await tx.proposal.findUnique({ where: { id } });
     if (!p) throw new HttpError(404, "Proposal not found");
@@ -29,11 +48,12 @@ export async function decideProposal(id: number, decision: Decision, actor: Deci
       throw new HttpError(409, "Proposal has expired");
     }
     // Conditional update guards against two approvers racing (portal + Discord).
-    const claimed = await tx.proposal.updateMany({ where: { id, status: "PENDING" }, data: { status: decision } });
+    const now = new Date();
+    const claimed = await tx.proposal.updateMany({ where: { id, status: "PENDING" }, data: { status: decision, ...(decision === "APPROVED" ? { approvedAt: now } : {}) } });
     if (claimed.count !== 1) throw new HttpError(409, "Proposal was decided concurrently");
     const approval = await tx.approval.create({ data: { proposalId: id, approverId: actor.approverId, decision, comment } });
     if (p.taskId) {
-      await tx.task.update({ where: { id: p.taskId }, data: { status: decision === "APPROVED" ? "IN_PROGRESS" : "BLOCKED" } });
+      await tx.task.update({ where: { id: p.taskId }, data: { status: decision === "APPROVED" ? "IN_PROGRESS" : "BLOCKED", ...(decision === "APPROVED" ? { approvedAt: now } : {}) } });
     }
     const agent = await tx.agent.findUnique({ where: { id: p.requestingAgentId } });
     if (agent && agent.status === "WAITING_APPROVAL") {

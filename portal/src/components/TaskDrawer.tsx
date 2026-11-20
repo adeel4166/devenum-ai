@@ -5,7 +5,7 @@ import { Agent, api, fmtDate, fmtMs, label, STATUS_ORDER, Task } from "@/lib/api
 import { useApi } from "@/lib/useApi";
 import { useSession } from "@/lib/session";
 import { useToast } from "@/components/toast";
-import { Badge, Drawer, Field, Skeleton, Terminal } from "@/components/ui";
+import { Badge, Drawer, Field, Skeleton, Terminal, TimeBreakdown } from "@/components/ui";
 
 export function TaskDrawer({ taskId, onClose, onChanged }: { taskId: number; onClose: () => void; onChanged: () => void }) {
   const { data: task, reload } = useApi<Task>(`/tasks/${taskId}`);
@@ -58,6 +58,7 @@ export function TaskDrawer({ taskId, onClose, onChanged }: { taskId: number; onC
           {task.status === "READY" && !task.assignedAgentId && <p className="text-xs text-amber-300">Assign an agent before triggering a run.</p>}
 
           <fieldset disabled={!canWrite} className="space-y-3">
+            <TimeBreakdown t={task} />
             <Field label="Title"><input className="input" value={f.title} onChange={set("title")} /></Field>
             <Field label="Description"><textarea className="input h-28" value={f.description} onChange={set("description")} /></Field>
             <div className="grid grid-cols-3 gap-3">

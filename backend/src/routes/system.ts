@@ -5,6 +5,7 @@ import { requireRole } from "../auth";
 import { audit } from "../audit";
 import { wrap } from "../http";
 import { allPreviews, githubConfigured } from "../services/ops";
+import { devenumServices, vpsMetrics } from "../services/sysops";
 
 export const systemRouter = Router();
 const writers = requireRole("CEO", "ADMIN");
@@ -12,7 +13,7 @@ const writers = requireRole("CEO", "ADMIN");
 export const DEFAULT_SETTINGS = {
   geminiApiKey: "",
   claudeCliEnabled: true,
-  autoExpireHours: 48,
+  autoExpireHours: 24,
   globalPaused: false,
   maxConcurrentAgents: 3,
   maxStepsPerRun: 50,
@@ -99,7 +100,13 @@ systemRouter.get("/dashboard", wrap(async (_req, res) => {
 /** Recent audit events for the live activity feed (the portal renders them as plain-English sentences). */
 systemRouter.get("/activity", wrap(async (req, res) => {
   const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 40));
-  res.json(await prisma.auditEvent.findMany({ orderBy: { id: "desc" }, take: limit }));
+  const projectId = Number(req.query.projectId) || null;
+  if (!projectId) return res.json(await prisma.auditEvent.findMany({ orderBy: { id: "desc" }, take: limit }));
+  // Project context: events whose target is the project, one of its tasks, or one of its proposals.
+  const p = await prisma.project.findUnique({ where: { id: projectId }, select: { slug: true, tasks: { select: { id: true } }, proposals: { select: { id: true } } } });
+  if (!p) return res.json([]);
+  const targets = [`project:${p.slug}`, `project:${projectId}`, ...p.tasks.map(t => `task:${t.id}`), ...p.proposals.map(x => `proposal:${x.id}`)];
+  res.json(await prisma.auditEvent.findMany({ where: { target: { in: targets } }, orderBy: { id: "desc" }, take: limit }));
 }));
 
 /** Liveness of backend, worker (heartbeat every poll) and Discord bot (heartbeat every poll). */
@@ -119,5 +126,7 @@ systemRouter.get("/health", wrap(async (_req, res) => {
     bot: beat("heartbeat:bot", 45_000),
     github: { configured: githubConfigured() },
     previews: allPreviews(),
+    vps: await vpsMetrics().catch(() => null),
+    services: await devenumServices().catch(() => []),
   });
 }));

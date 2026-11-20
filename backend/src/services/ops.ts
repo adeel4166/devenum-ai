@@ -9,6 +9,10 @@ import { UPLOAD_LIMIT_BYTES, zipWorkspace } from "./download";
 import { githubConfigured, pushProject } from "./github";
 import { startJob } from "./jobs";
 import { getPreview, listPreviews, startPreview, stopPreview } from "./preview";
+import { createBackup } from "./backup";
+import { deployProject, stopDeploy } from "./deploy";
+import { workspacePath } from "./exec";
+import { projectBusy, requireWorkspace } from "./workspace";
 
 /**
  * Project operations shared by the portal (JWT routes) and the Discord bot (/api/bot routes), so both surfaces
@@ -158,4 +162,97 @@ export async function requestChanges(proposalId: number, comment: string, a: Ops
     return t;
   });
   return { followUpTaskId: followUp.id, title: followUp.title };
+}
+
+/* ---------- Freeze, decisions ---------- */
+
+export async function setFrozen(projectId: number, frozen: boolean, a: OpsActor) {
+  const p = await projectOr404(projectId);
+  await prisma.project.update({ where: { id: projectId }, data: { isFrozen: frozen } });
+  await log(a, frozen ? "PROJECT_FROZEN" : "PROJECT_UNFROZEN", `project:${p.slug}`, {});
+  return { id: projectId, name: p.name, isFrozen: frozen };
+}
+
+export async function pinDecision(projectId: number, d: { title: string; decision: string; rationale?: string | null }, pinnedBy: string, a: OpsActor) {
+  const p = await projectOr404(projectId);
+  const row = await prisma.projectDecision.create({ data: { projectId, title: d.title.slice(0, 190), decision: d.decision.slice(0, 20000), rationale: d.rationale?.slice(0, 5000) || null, pinnedBy: pinnedBy.slice(0, 120) } });
+  await log(a, "DECISION_PINNED", `project:${p.slug}`, { decisionId: row.id, title: row.title });
+  return { ...row, project: { id: p.id, name: p.name } };
+}
+
+/* ---------- Retry, delete, deploy, backup ---------- */
+
+/** CEO-triggered retry of a timed-out / blocked task: it goes back to READY and continues on its task branch. */
+export async function retryTask(taskId: number, a: OpsActor) {
+  const t = await prisma.task.findUnique({ where: { id: taskId } });
+  if (!t) throw new HttpError(404, "Task not found");
+  if (!["NEEDS_RETRY", "BLOCKED", "BACKLOG"].includes(t.status)) throw new HttpError(409, `Task is ${t.status}; only NEEDS_RETRY, BLOCKED or BACKLOG tasks can be retried`);
+  await prisma.task.update({ where: { id: taskId }, data: { status: "READY", queuedAt: new Date(), startedAt: null, completedAt: null, approvedAt: null } });
+  await log(a, "TASK_RETRY_REQUESTED", `task:${taskId}`, { previousStatus: t.status });
+  return { id: taskId, title: t.title, status: "READY" };
+}
+
+/**
+ * Deletes a project completely: stops its preview and live deploy, removes its DB records (runs, proposals,
+ * approvals, tasks, related audit events, project) in one transaction, then removes the workspace folder.
+ * A PROJECT_DELETED audit event is written afterwards so the deletion itself stays on record.
+ */
+export async function deleteProject(projectId: number, a: OpsActor) {
+  const project = await projectOr404(projectId);
+  if (await projectBusy(projectId)) throw new HttpError(409, "An agent is working on this project right now — pause it or wait for the run to finish");
+  await stopPreview(projectId).catch(() => null);
+  await stopDeploy(projectId).catch(() => null);
+
+  const counts = await prisma.$transaction(async tx => {
+    const tasks = await tx.task.findMany({ where: { projectId }, select: { id: true } });
+    const proposals = await tx.proposal.findMany({ where: { projectId }, select: { id: true } });
+    const taskIds = tasks.map(t => t.id), proposalIds = proposals.map(p => p.id);
+    await tx.agent.updateMany({ where: { currentTaskId: { in: taskIds } }, data: { currentTaskId: null } });
+    const runs = await tx.agentRun.deleteMany({ where: { taskId: { in: taskIds } } });
+    const audits = await tx.auditEvent.deleteMany({ where: { target: { in: [
+      `project:${project.slug}`, ...taskIds.map(id => `task:${id}`), ...proposalIds.map(id => `proposal:${id}`),
+    ] } } });
+    await tx.quote.updateMany({ where: { projectId }, data: { projectId: null } });
+    // Ask devenum-bot to remove the project's Discord channel (it polls this list).
+    if (project.discordChannelId) {
+      const row = await tx.setting.findUnique({ where: { key: "discord:channelCleanup" } });
+      const list = Array.isArray(row?.value) ? (row!.value as string[]) : [];
+      await tx.setting.upsert({ where: { key: "discord:channelCleanup" }, create: { key: "discord:channelCleanup", value: [...list, project.discordChannelId] }, update: { value: [...list, project.discordChannelId] } });
+    }
+    await tx.project.delete({ where: { id: projectId } }); // cascades tasks, proposals, approvals
+    return { tasks: taskIds.length, proposals: proposalIds.length, runs: runs.count, auditEvents: audits.count };
+  });
+
+  let workspaceRemoved = false;
+  try {
+    const ws = workspacePath(project.slug); // slug-validated, always inside WORKSPACES_DIR
+    if (fs.existsSync(ws)) { fs.rmSync(ws, { recursive: true, force: true }); workspaceRemoved = true; }
+  } catch { /* reported below */ }
+  await log(a, "PROJECT_DELETED", `project:${project.slug}`, { name: project.name, ...counts, workspaceRemoved });
+  return { deleted: true, name: project.name, slug: project.slug, ...counts, workspaceRemoved };
+}
+
+export async function deployJob(projectId: number, a: OpsActor) {
+  const project = await projectOr404(projectId);
+  requireWorkspace(project.slug);
+  return startJob("deploy", async progress => {
+    const r = await deployProject(projectId, progress);
+    await log(a, "PROJECT_DEPLOYED", `project:${project.slug}`, { url: r.url, port: r.port, kind: r.kind, pm2: r.name });
+    return r;
+  });
+}
+
+export async function stopProjectDeploy(projectId: number, a: OpsActor) {
+  const project = await projectOr404(projectId);
+  const r = await stopDeploy(projectId);
+  await log(a, "DEPLOY_STOPPED", `project:${project.slug}`, { pm2: r.name, wasRunning: r.stopped });
+  return r;
+}
+
+export function backupJob(a: OpsActor) {
+  return startJob("backup", async progress => {
+    const r = await createBackup(progress);
+    await log(a, "BACKUP_CREATED", `backup:${r.name}`, { bytes: r.bytes });
+    return r;
+  });
 }

@@ -8,6 +8,7 @@ import { useSession } from "@/lib/session";
 import { useToast } from "@/components/toast";
 import { Badge, CardSkeletons, EmptyState, ErrorBox, Field, HelpText, Modal, Mono, PageHeader, Progress } from "@/components/ui";
 import { ProjectActions } from "@/components/ProjectActions";
+import { Blueprints } from "@/components/Blueprints";
 
 const CATEGORY = { WEB: { icon: Globe, text: "Web" }, MOBILE_APP: { icon: Smartphone, text: "Mobile app" }, GAME: { icon: Gamepad2, text: "Game" } } as const;
 
@@ -27,6 +28,8 @@ export default function ProjectsPage() {
       <PageHeader title="Projects & Workspaces" subtitle="Each project is an isolated git workspace your agents build in. Open one to see its pipeline, preview it live, download it or push it to GitHub."
         action={canWrite && <button className="btn-primary" onClick={() => setCreating(true)}><Plus size={15} /> New project</button>} />
       <ErrorBox message={error} />
+      <div className="mb-8"><Blueprints /></div>
+      <h2 className="mb-3 font-semibold text-white">Your projects</h2>
       {loading && !data ? <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3"><CardSkeletons n={3} h="h-56" /></div> : !data?.length ? (
         <EmptyState icon={FolderKanban} title="No projects yet" text="Create your first project, then describe what to build — the agents take it from there."
           action={canWrite && <button className="btn-primary" onClick={() => setCreating(true)}><Plus size={15} /> Create a project</button>} />
@@ -59,6 +62,9 @@ export default function ProjectsPage() {
                   {p.preview && <a href={p.preview.url} target="_blank" rel="noreferrer noopener" className="inline-flex items-center gap-1 text-emerald-300 hover:underline"><Globe size={11} /> Preview live</a>}
                   {p.githubRepoUrl && <a href={p.githubRepoUrl} target="_blank" rel="noreferrer noopener" className="inline-flex items-center gap-1 hover:text-slate-300"><Github size={11} /> GitHub</a>}
                   {!!t.active && <span className="text-sky-300">{t.active} queued/in progress</span>}
+                  {p.liveUrl && <a href={p.liveUrl} target="_blank" rel="noreferrer noopener" className="inline-flex items-center gap-1 text-emerald-300 hover:underline">● Live</a>}
+                  {p.isFrozen && <span className="text-sky-300">❄️ frozen</span>}
+                  {p.workspaceExists === false && <span className="text-amber-200/70">workspace not initialized</span>}
                 </div>
                 <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/5 pt-4">
                   <Link href={`/projects/${p.id}`} className="btn-soft !px-2.5 !py-1 text-xs">Open workspace <ArrowRight size={12} /></Link>

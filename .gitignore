@@ -4,3 +4,5 @@ node_modules/
 .next/
 # Agent git workspaces are separate repos managed by devenum-worker
 workspaces/
+backups/
+deploys/

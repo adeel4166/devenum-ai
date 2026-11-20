@@ -25,7 +25,7 @@ export const prisma = new PrismaClient();
 const DEFAULT_SETTINGS = {
   geminiApiKey: "",
   claudeCliEnabled: true,
-  autoExpireHours: 48,
+  autoExpireHours: 24,
   globalPaused: false,
   maxConcurrentAgents: 3,
   maxStepsPerRun: 50,

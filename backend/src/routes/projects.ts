@@ -4,7 +4,9 @@ import { prisma } from "../db";
 import { requireRole } from "../auth";
 import { audit } from "../audit";
 import { HttpError, idParam, wrap } from "../http";
-import { autoBuildJob, githubConfigured, githubPushJob, OpsActor, previewInfo, queueHandoff, startPreviewJob, stopProjectPreview, withProjectZip } from "../services/ops";
+import { pinDecision, setFrozen, autoBuildJob, deleteProject, deployJob, githubConfigured, githubPushJob, OpsActor, previewInfo, queueHandoff, startPreviewJob, stopProjectDeploy, stopProjectPreview, withProjectZip } from "../services/ops";
+import { fileTree, readEnv, readFile, requireWorkspace, workspaceExists, writeEnv, writeFileAsCeo } from "../services/workspace";
+import { liveStatus } from "../services/deploy";
 
 export const projectsRouter = Router();
 const writers = requireRole("CEO", "ADMIN");
@@ -38,7 +40,7 @@ projectsRouter.get("/", wrap(async (_req, res) => {
     const taskCounts: Record<string, number> = {};
     for (const c of counts) if (c.projectId === p.id) taskCounts[c.status] = c._count;
     const lastRun = lastRuns.find(r => Number(r.projectId) === p.id)?.lastAt;
-    return { ...p, taskCounts, lastActivityAt: (lastRun ?? p.createdAt).toISOString?.() ?? p.createdAt, preview: previewInfo(p.id) };
+    return { ...p, taskCounts, lastActivityAt: (lastRun ?? p.createdAt).toISOString?.() ?? p.createdAt, preview: previewInfo(p.id), workspaceExists: workspaceExists(p.slug) };
   }));
 }));
 
@@ -59,7 +61,7 @@ projectsRouter.get("/:id", wrap(async (req, res) => {
   if (!project) throw new HttpError(404, "Project not found");
   const agents = new Map<number, NonNullable<(typeof project.tasks)[number]["assignedAgent"]>>();
   for (const t of project.tasks) if (t.assignedAgent) agents.set(t.assignedAgent.id, t.assignedAgent);
-  res.json({ ...project, agents: [...agents.values()], preview: previewInfo(project.id) });
+  res.json({ ...project, agents: [...agents.values()], preview: previewInfo(project.id), workspaceExists: workspaceExists(project.slug), live: project.liveUrl ? await liveStatus(project.slug) : null });
 }));
 
 projectsRouter.post("/", writers, wrap(async (req, res) => {
@@ -119,4 +121,75 @@ projectsRouter.post("/:id/auto-build", writers, wrap(async (req, res) => {
 
 projectsRouter.post("/:id/handoff", writers, wrap(async (req, res) => {
   res.status(201).json(await queueHandoff(idParam(req), portalActor(req)));
+}));
+
+/* ---------------- Delete, deploy, env, files ---------------- */
+
+projectsRouter.delete("/:id", requireRole("CEO"), wrap(async (req, res) => {
+  res.json(await deleteProject(idParam(req), portalActor(req)));
+}));
+
+projectsRouter.post("/:id/deploy", requireRole("CEO"), wrap(async (req, res) => {
+  res.status(202).json({ jobId: (await deployJob(idParam(req), portalActor(req))).id });
+}));
+projectsRouter.post("/:id/deploy-stop", requireRole("CEO"), wrap(async (req, res) => {
+  res.json(await stopProjectDeploy(idParam(req), portalActor(req)));
+}));
+
+const projectWs = async (req: import("express").Request) => {
+  const p = await prisma.project.findUnique({ where: { id: idParam(req) } });
+  if (!p) throw new HttpError(404, "Project not found");
+  return { project: p, ws: requireWorkspace(p.slug) };
+};
+
+projectsRouter.get("/:id/env", writers, wrap(async (req, res) => {
+  const { ws } = await projectWs(req);
+  res.json({ vars: readEnv(ws) });
+}));
+projectsRouter.put("/:id/env", writers, wrap(async (req, res) => {
+  const { vars } = z.object({ vars: z.array(z.object({ key: z.string().min(1).max(120), value: z.string().max(10000) })).max(300) }).parse(req.body);
+  const { project, ws } = await projectWs(req);
+  const n = await writeEnv(ws, vars);
+  await audit("CEO", req.user!.id, "PROJECT_ENV_UPDATED", `project:${project.slug}`, { keys: vars.map(v => v.key) }); // never the values
+  res.json({ saved: n });
+}));
+
+projectsRouter.get("/:id/files", wrap(async (req, res) => {
+  const { ws } = await projectWs(req);
+  res.json(fileTree(ws));
+}));
+projectsRouter.get("/:id/file", wrap(async (req, res) => {
+  const { ws } = await projectWs(req);
+  const rel = String(req.query.path ?? "");
+  if (/(^|\/)\.env(\.|$)/.test(rel) && !rel.endsWith(".env.example")) throw new HttpError(403, "Use the Environment tab to view .env secrets");
+  res.json(readFile(ws, rel));
+}));
+projectsRouter.put("/:id/file", requireRole("CEO"), wrap(async (req, res) => {
+  const b = z.object({ path: z.string().min(1).max(500), content: z.string().max(1024 * 1024) }).parse(req.body);
+  const { project, ws } = await projectWs(req);
+  const r = await writeFileAsCeo(project.id, ws, b.path, b.content, req.user!.name);
+  await audit("CEO", req.user!.id, "FILE_EDITED", `project:${project.slug}`, { path: r.path, commit: r.commit });
+  res.json(r);
+}));
+
+/* ---------------- Pinned decisions & freeze ---------------- */
+
+projectsRouter.get("/:id/decisions", wrap(async (req, res) => {
+  res.json(await prisma.projectDecision.findMany({ where: { projectId: idParam(req) }, orderBy: { createdAt: "desc" } }));
+}));
+projectsRouter.post("/:id/decisions", writers, wrap(async (req, res) => {
+  const b = z.object({ title: z.string().trim().min(2).max(190), decision: z.string().trim().min(2).max(20000), rationale: z.string().trim().max(5000).optional() }).parse(req.body);
+  res.status(201).json(await pinDecision(idParam(req), b, req.user!.name, portalActor(req)));
+}));
+projectsRouter.delete("/:id/decisions/:decisionId", writers, wrap(async (req, res) => {
+  const projectId = idParam(req), decisionId = Number(req.params.decisionId);
+  const d = await prisma.projectDecision.findFirst({ where: { id: decisionId, projectId } });
+  if (!d) throw new HttpError(404, "Decision not found");
+  await prisma.projectDecision.delete({ where: { id: d.id } });
+  await audit("CEO", req.user!.id, "DECISION_UNPINNED", `project:${projectId}`, { decisionId, title: d.title });
+  res.json({ ok: true });
+}));
+projectsRouter.post("/:id/freeze", writers, wrap(async (req, res) => {
+  const { frozen } = z.object({ frozen: z.boolean() }).parse(req.body);
+  res.json(await setFrozen(idParam(req), frozen, portalActor(req)));
 }));

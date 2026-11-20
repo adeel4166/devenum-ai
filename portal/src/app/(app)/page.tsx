@@ -12,6 +12,7 @@ import { useApi } from "@/lib/useApi";
 import { useSession } from "@/lib/session";
 import { useToast } from "@/components/toast";
 import { AgentAvatar, ErrorBox, Mono, Skeleton, StatCard } from "@/components/ui";
+import { Blueprints } from "@/components/Blueprints";
 
 type Mode = "build" | "task" | "ask";
 const MODES: { id: Mode; label: string; icon: typeof Rocket; help: string; placeholder: string }[] = [
@@ -40,7 +41,8 @@ function Hero() {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const m = MODES.find(x => x.id === mode)!;
 
-  useEffect(() => { if (!projectId && projects[0]) setProjectId(String(projects[0].id)); }, [projects, projectId]);
+  const session = useSession();
+  useEffect(() => { if (!projectId && projects[0]) setProjectId(String(session.projectId ?? projects[0].id)); }, [projects, projectId, session.projectId]);
   useEffect(() => { // auto-grow textarea
     const t = taRef.current; if (!t) return;
     t.style.height = "auto"; t.style.height = `${Math.min(220, t.scrollHeight)}px`;
@@ -183,14 +185,16 @@ const TONE_DOT: Record<FeedItem["tone"], string> = {
 };
 
 function ActivityFeed() {
-  const { data, error, loading } = useApi<AuditEvent[]>("/system/activity?limit=40", 5000);
+  const { projectId, projects } = useSession();
+  const { data, error, loading } = useApi<AuditEvent[]>(`/system/activity?limit=40${projectId ? `&projectId=${projectId}` : ""}`, 5000);
+  const ctx = projects.find(p => p.id === projectId);
   const items = useMemo(() => (data ?? []).map(humanize), [data]);
   return (
     <section className="card p-5">
       <div className="mb-4 flex items-center justify-between">
         <div>
           <h2 className="font-semibold text-white">Live agency activity</h2>
-          <p className="text-xs text-slate-500">What your agents and you have been doing — refreshes every 5 seconds.</p>
+          <p className="text-xs text-slate-500">{ctx ? <>Only <b className="text-slate-300">{ctx.name}</b> (project context)</> : "What your agents and you have been doing"} — refreshes every 5 seconds.</p>
         </div>
         <span className="flex items-center gap-1.5 text-xs text-emerald-300"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> Live</span>
       </div>
@@ -288,6 +292,7 @@ export default function CommandCenter() {
           </>
         )}
       </div>
+      <Blueprints compact />
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2"><ActivityFeed /></div>
         <SidePanels />

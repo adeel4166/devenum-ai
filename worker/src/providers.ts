@@ -19,7 +19,7 @@ export interface Manifest { allowedTools?: string[]; prohibitedActions?: string[
 
 export function buildPrompt(p: {
   agent: Agent; manifest: Manifest; project: Project; task: Task; branch: string; workspace: string;
-  reviewFeedback: string[]; provider: Provider;
+  reviewFeedback: string[]; provider: Provider; decisions?: { title: string; decision: string; rationale: string | null }[];
 }) {
   const { agent, manifest, project, task } = p;
   const list = (xs?: string[]) => (xs?.length ? xs.map(x => `- ${x}`).join("\n") : "- (none)");
@@ -48,6 +48,10 @@ ${canEdit ? `- Your current directory is the project's git repository (${p.works
 - Tech stack: ${project.techStack || "not specified — choose a sensible default and state it"}
 - Description: ${project.description || "(none)"}
 
+${p.decisions?.length ? `
+## Pinned project decisions (canonical CEO decisions — you MUST follow these)
+${p.decisions.map((d, i) => `${i + 1}. **${d.title}**: ${d.decision}${d.rationale ? ` (why: ${d.rationale})` : ""}`).join("\n")}
+` : ""}
 ## Task #${task.id} [${task.priority}]
 Title: ${task.title}
 

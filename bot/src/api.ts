@@ -1,9 +1,16 @@
 export interface Actor { id: string; tag: string }
 
+export interface QaReport { status: "PASSED" | "WARNINGS"; score: number; findings: { severity: string; check: string; message: string; file?: string }[] }
+export interface DeployResult { projectId: number; projectName: string; name: string; port: number; url: string; kind: string }
+export interface SystemInfo {
+  vps: { cpu: { percent: number; cores: number; load: number[] }; memory: { total: number; used: number; percent: number }; disk: { total: number; used: number; percent: number }; uptimeSec: number };
+  services: { name: string; status: string; cpu: number; memory: number; restarts: number; kind: string }[];
+}
+export interface TimeoutAlert { id: number; errorMessage: string | null; executionMs: number; agent: { name: string; slug: string }; task: { id: number; title: string; status: string; project: { id: number; name: string; slug: string } } | null }
 export interface Proposal {
   id: number; actionType: string; targetResource: string; scopeSummary: string; rationale: string; riskLevel: "LOW" | "MEDIUM" | "HIGH";
   rollbackPlan: string; validationPlan: string; status: string; expiresAt: string; createdAt: string;
-  branchName: string | null; changedFiles: string[] | null;
+  branchName: string | null; changedFiles: string[] | null; qaReport?: QaReport | null; payloadHash?: string | null; headCommit?: string | null;
   project: { id: number; name: string; slug: string };
   task: { id: number; title: string; priority: string } | null;
   requestingAgent: { id: number; name: string; slug: string };
@@ -23,6 +30,9 @@ export interface PreviewInfo { projectId: number; slug: string; port: number; ur
 export interface GithubPushResult { url: string; created: boolean; isPrivate: boolean; visibilityMismatch: boolean; projectName: string }
 export interface AutoBuildResult { projectId: number; projectName: string; goal: string; tasks: { id: number; title: string; priority: string; agent: { name: string; slug: string } }[] }
 export interface ChatTurn { role: "user" | "assistant"; author?: string; content: string }
+export interface PlanTask { agentSlug: string; agentName: string; title: string; description: string; priority: string }
+export interface TeamPlan { id: number; summary: string; project: { existingProjectId: number | null; name: string; category: string; techStack: string; description: string }; tasks: PlanTask[] }
+export interface DispatchResult { planId: number; project: { id: number; name: string; slug: string }; tasks: { id: number; title: string; agent: string; agentSlug: string; priority: string }[] }
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -86,7 +96,40 @@ export class BackendApi {
   startPreview = (projectId: number, actor: Actor, onProgress?: (m: string) => unknown) => this.runJob<PreviewInfo>(`/projects/${projectId}/preview`, {}, actor, onProgress);
   githubPush = (projectId: number, visibility: "private" | "public", actor: Actor) => this.runJob<GithubPushResult>(`/projects/${projectId}/github`, { visibility }, actor);
   autoBuild = (projectId: number, goal: string, actor: Actor) => this.runJob<AutoBuildResult>(`/projects/${projectId}/auto-build`, { goal }, actor);
-  chat = (message: string, history: ChatTurn[], author: string) => this.runJob<{ reply: string; ms: number }>("/chat", { message, history, author }, undefined, undefined, 120_000);
+  /** Chat may run up to 5 minutes on the backend (deep research / document analysis); wait a little longer than that. */
+  chat = (message: string, history: ChatTurn[], author: string, attachments: unknown[] = [], dir?: string, agentSlug?: string) =>
+    this.runJob<{ reply: string; ms: number }>("/chat", { message, history, author, attachments, dir, agentSlug }, undefined, undefined, 360_000);
+  pmChat = (message: string, history: ChatTurn[], author: string, attachments: unknown[] = [], dir?: string) =>
+    this.runJob<{ reply: string; plan: TeamPlan | null }>("/pm/chat", { message, history, author, attachments, dir }, undefined, undefined, 360_000);
+  dispatchPlan = (id: number, actor: Actor) => this.req<DispatchResult>("POST", `/pm/plans/${id}/dispatch`, {}, actor);
+  discardPlan = (id: number, actor: Actor) => this.req("POST", `/pm/plans/${id}/discard`, {}, actor);
+
+  deleteProject = (id: number, actor: Actor) => this.req<{ name: string; tasks: number; proposals: number; workspaceRemoved: boolean }>("DELETE", `/projects/${id}`, undefined, actor);
+  deploy = (id: number, actor: Actor, onProgress?: (m: string) => unknown) => this.runJob<DeployResult>(`/projects/${id}/deploy`, {}, actor, onProgress);
+  deployStop = (id: number, actor: Actor) => this.req<{ stopped: boolean; name: string }>("POST", `/projects/${id}/deploy-stop`, {}, actor);
+  retryTask = (id: number, actor: Actor) => this.req<{ id: number; title: string }>("POST", `/tasks/${id}/retry`, {}, actor);
+  system = () => this.req<SystemInfo>("GET", "/system");
+  restartService = (name: string, actor: Actor) => this.req<{ name: string; deferred: boolean }>("POST", `/system/restart/${name}`, {}, actor);
+  backup = (actor: Actor, onProgress?: (m: string) => unknown) => this.runJob<{ name: string; bytes: number }>("/backup", {}, actor, onProgress, 3_600_000);
+  pinDecision = (projectId: number, b: { title: string; decision: string; rationale?: string }, actor: Actor) =>
+    this.req<{ id: number; title: string; project: { id: number; name: string } }>("POST", `/projects/${projectId}/decisions`, b, actor);
+  freeze = (projectId: number, frozen: boolean, actor: Actor) => this.req<{ id: number; name: string; isFrozen: boolean }>("POST", `/projects/${projectId}/freeze`, { frozen }, actor);
+  dailyReport = (actor: Actor) => this.req<{ id: number; title: string; body: string }>("POST", "/reports/daily", {}, actor);
+  unpostedReports = () => this.req<{ id: number; title: string; body: string }[]>("GET", "/reports/unposted");
+  markReportPosted = (id: number) => this.req("POST", `/reports/${id}/posted`, {});
+  projectsWithoutChannel = () => this.req<{ id: number; name: string; slug: string; description: string }[]>("GET", "/discord/projects");
+  projectChannels = () => this.req<{ id: number; discordChannelId: string | null }[]>("GET", "/discord/channels");
+  setProjectChannel = (id: number, channelId: string) => this.req("POST", `/projects/${id}/discord`, { channelId });
+  taskUpdates = () => this.req<{
+    id: number; title: string; status: string; priority: string; outputSummary: string | null; discordThreadId: string | null; discordLastStatus: string | null;
+    project: { id: number; name: string; discordChannelId: string | null }; assignedAgent: { name: string; slug: string } | null;
+    proposals: { id: number; status: string; riskLevel: string; qaReport: unknown; branchName: string | null; mergeStatus: string | null }[];
+  }[]>("GET", "/discord/task-updates");
+  markTaskPosted = (id: number, status: string, threadId?: string) => this.req("POST", `/tasks/${id}/discord`, { status, threadId });
+  discordCleanup = () => this.req<{ channelIds: string[] }>("GET", "/discord/cleanup");
+  discordCleanupAck = (channelIds: string[]) => this.req("POST", "/discord/cleanup/ack", { channelIds });
+  timeoutAlerts = () => this.req<TimeoutAlert[]>("GET", "/alerts/timeouts");
+  markAlerted = (runId: number) => this.req("POST", `/runs/${runId}/alerted`, {});
 
   /** Downloads the workspace ZIP (backend enforces Discord's upload limit). */
   async download(projectId: number, actor: Actor): Promise<{ data: Buffer; name: string; files: number }> {

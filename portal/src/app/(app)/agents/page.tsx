@@ -32,7 +32,8 @@ export default function AgentsPage() {
   const working = (data ?? []).filter(a => a.status === "RUNNING").length;
 
   async function act(a: Agent, action: "pause" | "resume") {
-    if (await run(() => api(`/agents/${a.id}/action`, { method: "POST", body: { action } }), `${a.name} ${action === "pause" ? "paused" : "resumed"}`)) reload();
+    if (action === "pause" && a.status === "RUNNING" && !window.confirm(`${a.name} is working right now. Pausing cancels the run and re-queues the task. Continue?`)) return;
+    if (await run(() => api(`/agents/${a.id}/action`, { method: "POST", body: { action } }), `${a.name} ${action === "pause" ? "paused — the worker skips its tasks" : "resumed"}`)) reload();
   }
 
   return (
@@ -72,9 +73,15 @@ export default function AgentsPage() {
                 <div className="mt-4 flex flex-wrap gap-2 border-t border-white/5 pt-4">
                   {canWrite && <button className="btn-primary !px-2.5 !py-1 text-xs" disabled={a.status === "DISABLED"} onClick={() => setAssignTo(a.id)}><Send size={13} /> Assign Task</button>}
                   <button className="btn-ghost !px-2.5 !py-1 text-xs" onClick={() => setOpen(a.id)}><SlidersHorizontal size={13} /> Details & rules</button>
-                  {canWrite && a.status !== "DISABLED" && (a.status === "PAUSED"
-                    ? <button className="btn-ghost !px-2.5 !py-1 text-xs" onClick={() => act(a, "resume")}><Play size={13} /> Resume</button>
-                    : <button className="btn-ghost !px-2.5 !py-1 text-xs" onClick={() => act(a, "pause")}><Pause size={13} /> Pause</button>)}
+                  {canWrite && a.status !== "DISABLED" && (
+                    <label className="ml-auto flex cursor-pointer items-center gap-2 text-xs text-slate-400" title={a.status === "PAUSED" ? "Paused: the worker skips this agent's tasks" : "Active: picks up READY tasks"}>
+                      {a.status === "PAUSED" ? <Pause size={12} /> : <Play size={12} />}{a.status === "PAUSED" ? "Paused" : "Active"}
+                      <button type="button" role="switch" aria-checked={a.status !== "PAUSED"} aria-label={`${a.name} active`} onClick={() => act(a, a.status === "PAUSED" ? "resume" : "pause")}
+                        className={`relative h-5 w-9 rounded-full transition ${a.status === "PAUSED" ? "bg-white/15" : "bg-emerald-500"}`}>
+                        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${a.status === "PAUSED" ? "left-0.5" : "left-[18px]"}`} />
+                      </button>
+                    </label>
+                  )}
                 </div>
               </div>
             );

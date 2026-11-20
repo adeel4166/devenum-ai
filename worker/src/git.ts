@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import fs from "fs";
 import path from "path";
 import { config } from "./config";
@@ -21,6 +22,14 @@ export async function prepareRepo(ws: string, label: string) {
     await git(ws, "config", "user.name", "Devenum AI Worker");
     await git(ws, "config", "user.email", "worker@devenum.local");
     await git(ws, "commit", "--allow-empty", "-m", "chore: initialize Devenum AI workspace");
+  }
+  // Local-only ignore rules (never committed): dependencies, build caches and real env files must not reach git.
+  const exclude = path.join(ws, ".git", "info", "exclude");
+  const wanted = ["node_modules/", ".next/", ".env", ".env.local", ".env.*.local"];
+  const current = fs.existsSync(exclude) ? fs.readFileSync(exclude, "utf8") : "";
+  const missing = wanted.filter(w => !current.split("\n").includes(w));
+  if (missing.length) {
+    await must(["bash", "-c", `mkdir -p .git/info && printf '%s\\n' ${missing.map(m => `'${m}'`).join(" ")} >> .git/info/exclude`], ws);
   }
   // Preserve (never discard) anything left behind by an interrupted run.
   if (await git(ws, "status", "--porcelain")) {
@@ -63,11 +72,23 @@ export async function commitAndDescribe(ws: string, branch: string, message: str
   return { statusShort, commit, diffStat, changedFiles, insertions: num(/(\d+) insertion/), deletions: num(/(\d+) deletion/) };
 }
 
+/**
+ * Tamper lock for proposals: sha256 over branch name, head commit and `git diff --stat` against main's merge-base.
+ * The backend computes exactly the same value (services/payloadHash.ts) — keep the command identical.
+ */
+export async function payloadHash(ws: string, branch: string) {
+  const head = await git(ws, "rev-parse", `refs/heads/${branch}`);
+  const stat = await git(ws, "diff", "--stat=200,180", `main...${branch}`);
+  const hash = createHash("sha256").update(`${branch}\n${head}\n${stat}`).digest("hex");
+  return { hash, head };
+}
+
 /** Merges the task branch into main with a merge commit; aborts cleanly on conflict. */
 export async function mergeTaskBranch(ws: string, branch: string, message: string): Promise<{ ok: true; commit: string } | { ok: false; error: string }> {
   await prepareRepo(ws, `merge of ${branch}`);
   if (!(await branchExists(ws, branch))) return { ok: false, error: `Branch ${branch} does not exist in ${ws}` };
-  const r = await run(["git", "merge", "--no-ff", "-m", message, branch], { cwd: ws, timeoutMs: 120_000 });
+  // Explicit identity: the merge commit must never depend on repo/global git config.
+  const r = await run(["git", "-c", "user.name=Devenum AI Worker", "-c", "user.email=worker@devenum.local", "merge", "--no-ff", "-m", message, branch], { cwd: ws, timeoutMs: 120_000 });
   if (r.code !== 0) {
     await run(["git", "merge", "--abort"], { cwd: ws });
     return { ok: false, error: (r.stdout + "\n" + r.stderr).trim().slice(0, 4000) };

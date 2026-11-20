@@ -59,12 +59,16 @@ export interface Project {
   githubRepoUrl?: string | null;
   _count?: { tasks: number };
   taskCounts?: Record<string, number>; lastActivityAt?: string; preview?: PreviewInfo | null;
+  isFrozen?: boolean; discordChannelId?: string | null;
+  workspaceExists?: boolean; livePort?: number | null; liveUrl?: string | null; liveDeployedAt?: string | null;
+  live?: { status: string; restarts: number; cpu: number; memory: number } | null;
 }
 export interface AgentLite { id: number; name: string; slug: string; status: string; modelProvider?: string }
 export interface Task {
   id: number; projectId: number; assignedAgentId: number | null; title: string; description: string;
   priority: string; status: string; outputSummary: string | null; executionTimeMs: number | null; createdAt: string;
   parentTaskId?: number | null; dependencies?: number[] | null;
+  queuedAt?: string | null; startedAt?: string | null; completedAt?: string | null; approvedAt?: string | null;
   assignedAgent: AgentLite | null; project: { id: number; name: string };
   runs?: RunLite[];
 }
@@ -73,19 +77,29 @@ export interface Proposal {
   riskLevel: string; rollbackPlan: string; validationPlan: string; status: string; expiresAt: string; createdAt: string;
   project?: { id: number; name: string }; task: { id: number; title: string } | null;
   requestingAgent: { id: number; name: string; slug?: string; roleTitle?: string; modelProvider?: string };
-  branchName?: string | null; changedFiles?: string[] | null;
+  branchName?: string | null; changedFiles?: string[] | null; qaReport?: QaReport | null;
+  payloadHash?: string | null; headCommit?: string | null; approvedAt?: string | null;
   mergeStatus?: "MERGED" | "FAILED" | null; mergeCommit?: string | null; mergeError?: string | null; mergedAt?: string | null;
   approvals?: { decision: string; comment: string | null; decidedAt: string; approver: { name: string } }[];
 }
 export interface ProjectDetail extends Project {
   tasks: Task[]; proposals: Proposal[]; agents: AgentLite[];
 }
+export interface QaFinding { severity: "HIGH" | "MEDIUM" | "LOW"; check: string; message: string; file?: string }
+export interface QaReport { status: "PASSED" | "WARNINGS"; score: number; findings: QaFinding[]; checks: { name: string; status: string; detail: string; ms: number }[]; ranAt: string }
+export interface ServiceInfo { name: string; status: string; pid: number; cpu: number; memory: number; restarts: number; uptimeSince: number | null; kind: "core" | "live" }
+export interface VpsMetrics { cpu: { percent: number; cores: number; load: number[] }; memory: { total: number; used: number; percent: number }; disk: { total: number; used: number; avail: number; percent: number }; uptimeSec: number; hostname: string }
+export interface BackupInfo { name: string; bytes: number; createdAt: string; downloadPath: string }
+export const fmtBytes = (n: number) => n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} GB` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+export interface Decision { id: number; projectId: number; title: string; decision: string; rationale: string | null; pinnedBy: string; createdAt: string }
+export interface ReportRow { id: number; kind: string; title: string; body?: string; generatedBy: string; postedAt: string | null; createdAt: string; data: Record<string, unknown> }
 export interface Job<T> { id: string; kind: string; status: "running" | "succeeded" | "failed"; progress: string | null; result: T | null; error: string | null }
 export interface Health {
   backend: { ok: boolean; uptimeSec: number }; database: { ok: boolean };
   worker: { ok: boolean; lastSeen: string | null; info: { activeRuns?: number; paused?: boolean } | null };
   bot: { ok: boolean; lastSeen: string | null; info: { user?: string } | null };
   github: { configured: boolean }; previews: PreviewInfo[];
+  vps: VpsMetrics | null; services: ServiceInfo[];
 }
 export interface Kpis { activeProjects: number; runningAgents: number; idleAgents: number; pendingApprovals: number; totalAgents: number; completedRuns: number }
 
@@ -127,7 +141,7 @@ export interface Settings {
   maxStepsPerRun: number; maxRunTimeoutSeconds: number; dailyTokenBudget: number; requireApprovalForHighRisk: boolean;
 }
 
-export const STATUS_ORDER = ["BACKLOG", "READY", "AWAITING_APPROVAL", "IN_PROGRESS", "IN_REVIEW", "BLOCKED", "DONE"];
+export const STATUS_ORDER = ["BACKLOG", "READY", "AWAITING_APPROVAL", "IN_PROGRESS", "IN_REVIEW", "BLOCKED", "NEEDS_RETRY", "DONE"];
 export const label = (s: string) => s.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
 export const fmtMs = (ms: number | null | undefined) => {
   if (!ms) return "—";

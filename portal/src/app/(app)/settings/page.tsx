@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Activity, Bot, Database, Github, Globe, KeyRound, Pause, Play, Plus, Save, Server, Square, Workflow } from "lucide-react";
-import { api, fmtDate, Health, Settings, TeamUser, timeAgo } from "@/lib/api";
+import { Activity, Bot, Database, Download, Github, Globe, HardDriveDownload, KeyRound, Loader2, Pause, Play, Plus, RotateCw, Save, ScrollText, Server, Square, Workflow } from "lucide-react";
+import { api, BackupInfo, downloadFile, fmtBytes, fmtDate, Health, runJob, ServiceInfo, Settings, TeamUser, timeAgo, VpsMetrics } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { useSession } from "@/lib/session";
 import { useToast } from "@/components/toast";
@@ -11,10 +11,12 @@ export default function SettingsPage() {
   const { canWrite, isCeo } = useSession();
   return (
     <>
-      <PageHeader title="Settings & Controls" subtitle="Run or pause the agency, set how many agents work at once, check system health, and manage your team." />
+      <PageHeader title="Settings & Controls" subtitle="Run or pause the agency, control concurrency, watch server resources, restart services, take backups and manage your team — no terminal needed." />
       <div className="grid gap-6 xl:grid-cols-[1fr_24rem]">
         <div className="space-y-6">
           <AgencySection canWrite={canWrite} />
+          <ServerSection canWrite={canWrite} />
+          {isCeo && <BackupSection />}
           <AdvancedSection canWrite={canWrite} />
           <PasswordSection />
           {isCeo && <TeamSection />}
@@ -268,5 +270,116 @@ function AddUser({ onClose, onCreated }: { onClose: () => void; onCreated: () =>
         <div className="flex justify-end gap-2 pt-2"><button type="button" className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary">Create user</button></div>
       </form>
     </Modal>
+  );
+}
+
+function Meter({ label: l, pct, detail }: { label: string; pct: number; detail: string }) {
+  const tone = pct >= 90 ? "bg-rose-400" : pct >= 75 ? "bg-amber-400" : "bg-sky-400";
+  return (
+    <div className="rounded-xl bg-ink-900 p-3">
+      <div className="flex items-baseline justify-between"><span className="text-xs uppercase tracking-wide text-slate-400">{l}</span><span className="text-lg font-semibold tabular-nums text-white">{pct}%</span></div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10"><div className={`h-full rounded-full ${tone}`} style={{ width: `${pct}%` }} /></div>
+      <div className="mt-1.5 text-xs text-slate-500">{detail}</div>
+    </div>
+  );
+}
+
+function ServerSection({ canWrite }: { canWrite: boolean }) {
+  const { data: m, error, reload } = useApi<{ vps: VpsMetrics; services: ServiceInfo[] }>("/system/metrics", 5000);
+  const { toast } = useToast();
+  const [logs, setLogs] = useState<{ name: string; text: string } | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  async function restart(name: string) {
+    if (!window.confirm(`Restart ${name}?${name === "devenum-worker" ? " Running agent jobs are cancelled and re-queued." : name === "devenum-backend" ? " The portal reconnects in a few seconds." : ""}`)) return;
+    setBusy(name);
+    try { await api(`/system/restart/${name}`, { method: "POST" }); toast("success", `${name} is restarting`); setTimeout(reload, 3000); }
+    catch (e) { toast("error", (e as Error).message); } finally { setBusy(null); }
+  }
+  async function viewLogs(name: string) {
+    setLogs({ name, text: "Loading…" });
+    try { setLogs({ name, text: (await api<{ logs: string }>(`/system/logs/${name}?lines=300`)).logs || "(empty)" }); }
+    catch (e) { setLogs({ name, text: (e as Error).message }); }
+  }
+
+  return (
+    <section className="card space-y-4 p-5">
+      <div><h2 className="font-semibold text-white">Server &amp; services</h2><HelpText>Live VPS resources and the Devenum PM2 processes. Restarts only ever touch Devenum services — never other apps on this server.</HelpText></div>
+      <ErrorBox message={error} />
+      {!m ? <Skeleton className="h-40" /> : (
+        <>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Meter label="CPU" pct={m.vps.cpu.percent} detail={`${m.vps.cpu.cores} cores · load ${m.vps.cpu.load.join(" / ")}`} />
+            <Meter label="Memory" pct={m.vps.memory.percent} detail={`${fmtBytes(m.vps.memory.used)} of ${fmtBytes(m.vps.memory.total)}`} />
+            <Meter label="Disk" pct={m.vps.disk.percent} detail={`${fmtBytes(m.vps.disk.used)} of ${fmtBytes(m.vps.disk.total)}`} />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {m.services.map(s => (
+              <div key={s.name} className="rounded-xl border border-white/[0.06] bg-ink-900 p-3">
+                <div className="flex items-center gap-2">
+                  <span className={`h-2 w-2 rounded-full ${s.status === "online" ? "animate-pulse bg-emerald-400" : "bg-rose-400"}`} />
+                  <span className="font-mono text-sm text-slate-100">{s.name}</span>
+                  <span className="ml-auto text-[11px] text-slate-500">{s.kind === "live" ? "live deploy" : s.status}</span>
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-slate-400">
+                  <span><span className="block text-[10px] uppercase text-slate-500">CPU</span><span className="tabular-nums text-slate-200">{s.cpu}%</span></span>
+                  <span><span className="block text-[10px] uppercase text-slate-500">RAM</span><span className="tabular-nums text-slate-200">{fmtBytes(s.memory)}</span></span>
+                  <span><span className="block text-[10px] uppercase text-slate-500">Up since</span><span className="text-slate-200">{s.uptimeSince ? timeAgo(new Date(s.uptimeSince).toISOString()) : "—"}</span></span>
+                </div>
+                <div className="mt-3 flex gap-2">
+                  {canWrite && <button className="btn-ghost !px-2 !py-0.5 text-xs" disabled={!!busy} onClick={() => restart(s.name)}><RotateCw size={12} className={busy === s.name ? "animate-spin" : ""} /> Restart</button>}
+                  {canWrite && <button className="btn-ghost !px-2 !py-0.5 text-xs" onClick={() => viewLogs(s.name)}><ScrollText size={12} /> View logs</button>}
+                  <span className="ml-auto self-center text-[11px] text-slate-500">↺ {s.restarts}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {logs && (
+        <Modal title={`Logs · ${logs.name}`} onClose={() => setLogs(null)} wide>
+          <HelpText>Last 300 lines of stdout and stderr. Secrets from the server environment are redacted.</HelpText>
+          <pre className="mt-3 max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-xl bg-black/60 p-3 font-mono text-[11px] leading-relaxed text-slate-200">{logs.text}</pre>
+          <div className="mt-3 flex justify-end"><button className="btn-ghost text-xs" onClick={() => viewLogs(logs.name)}><RotateCw size={12} /> Refresh</button></div>
+        </Modal>
+      )}
+    </section>
+  );
+}
+
+function BackupSection() {
+  const { data, error, reload } = useApi<BackupInfo[]>("/system/backups");
+  const { toast } = useToast();
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
+  async function create() {
+    setBusy(true);
+    try {
+      const r = await runJob<BackupInfo>("/system/backup", {}, setProgress, 3_600_000);
+      toast("success", `Backup ready (${fmtBytes(r.bytes)})`);
+      await reload();
+      await downloadFile(`/system/backups/${r.name}`, r.name);
+    } catch (e) { toast("error", (e as Error).message); } finally { setBusy(false); setProgress(null); }
+  }
+  return (
+    <section className="card space-y-3 p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div><h2 className="font-semibold text-white">Backups</h2><HelpText>One ZIP with the full MySQL database and every project workspace (git history included, node_modules excluded). Stored on the server in /opt/devenum-ai/backups. It contains secrets — keep downloads safe.</HelpText></div>
+        <button className="btn-primary" onClick={create} disabled={busy}>{busy ? <Loader2 size={15} className="animate-spin" /> : <HardDriveDownload size={15} />} Download Full Backup</button>
+      </div>
+      {progress && <p className="flex items-center gap-2 text-xs text-slate-400"><Loader2 size={12} className="animate-spin" /> {progress}</p>}
+      <ErrorBox message={error} />
+      {!data ? <Skeleton className="h-16" /> : !data.length ? <p className="text-sm text-slate-500">No backups yet.</p> : (
+        <ul className="divide-y divide-white/5">
+          {data.map(b => (
+            <li key={b.name} className="flex items-center gap-3 py-2 text-sm">
+              <span className="min-w-0 flex-1 truncate font-mono text-xs text-slate-300">{b.name}</span>
+              <span className="text-xs text-slate-500">{fmtBytes(b.bytes)} · {timeAgo(b.createdAt)}</span>
+              <button className="btn-ghost !px-2 !py-0.5 text-xs" onClick={() => downloadFile(`/system/backups/${b.name}`, b.name).catch(e => toast("error", (e as Error).message))}><Download size={12} /> Download</button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }

@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  Bot, CheckSquare, FolderKanban, Inbox, LogOut, Menu, MessageSquare, OctagonAlert, Play, ScrollText, Settings, Sparkles, X, Zap,
+  BarChart3, Bot, CheckSquare, Crosshair, FileText, Newspaper, FolderKanban, Inbox, LogOut, Menu, MessageSquare, OctagonAlert, Play, ScrollText, Settings, Sparkles, X, Zap,
 } from "lucide-react";
 import { SessionProvider, useSession } from "@/lib/session";
 import { ToastProvider, useToast } from "@/components/toast";
@@ -16,6 +16,9 @@ const NAV = [
   { href: "/approvals", label: "Approval Inbox", icon: Inbox, hint: "Review & merge agent work" },
   { href: "/agents", label: "AI Team", icon: Bot, hint: "Your 11 specialist agents" },
   { href: "/chat", label: "Executive Chat", icon: MessageSquare, hint: "Brainstorm with your assistant" },
+  { href: "/quotes", label: "Client Quotes", icon: FileText, hint: "Scope, timeline & cost estimates" },
+  { href: "/analytics", label: "Analytics", icon: BarChart3, hint: "Leaderboard, volume & audit trail" },
+  { href: "/reports", label: "Reports", icon: Newspaper, hint: "Daily executive digests" },
   { href: "/tasks", label: "Task Board", icon: CheckSquare, hint: "Every task across projects" },
   { href: "/logs", label: "Activity & Logs", icon: ScrollText, hint: "Runs and audit trail" },
   { href: "/settings", label: "Settings", icon: Settings, hint: "Controls, health & team" },
@@ -63,7 +66,9 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
 function Shell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
-  const { canWrite } = useSession();
+  const { canWrite, projects, projectId, setProjectId } = useSession();
+  const ctx = projects.find(p => p.id === projectId) ?? null;
+  useEffect(() => { if (projectId && projects.length && !ctx) setProjectId(null); }, [projectId, projects, ctx, setProjectId]); // project was deleted
   const status = useApi<{ globalPaused: boolean }>("/system/status", 8000);
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
@@ -108,7 +113,15 @@ function Shell({ children }: { children: React.ReactNode }) {
             <div className="truncate text-sm font-medium text-white">{current?.label ?? "Devenum AI"}</div>
             <div className="hidden truncate text-xs text-slate-500 sm:block">{current?.hint}</div>
           </div>
-          <div className="ml-auto flex items-center gap-2">
+          <label className="ml-auto flex min-w-0 items-center gap-1.5 rounded-lg border border-white/10 bg-ink-900 px-2 py-1 text-xs" title="Project Context — scopes Tasks, Approvals, Activity and new work to one project">
+            <Crosshair size={13} className={ctx ? "text-brand" : "text-slate-500"} />
+            <span className="hidden text-slate-500 md:inline">Project Context:</span>
+            <select className="min-w-0 max-w-[10rem] bg-transparent text-slate-100 focus:outline-none sm:max-w-[14rem]" value={projectId ?? ""} onChange={e => setProjectId(e.target.value ? Number(e.target.value) : null)} aria-label="Project context">
+              <option value="">All Projects</option>
+              {projects.filter(p => p.status !== "COMPLETED").map(p => <option key={p.id} value={p.id}>{p.isFrozen ? "❄️ " : ""}{p.name}</option>)}
+            </select>
+          </label>
+          <div className="flex items-center gap-2">
             <span className={`hidden items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs sm:inline-flex ${paused ? "border-rose-500/30 bg-rose-500/10 text-rose-300" : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"}`}>
               <span className={`h-1.5 w-1.5 rounded-full ${paused ? "bg-rose-400" : "animate-pulse bg-emerald-400"}`} />
               {paused ? "Agency paused" : "Agency active"}
@@ -121,6 +134,14 @@ function Shell({ children }: { children: React.ReactNode }) {
             )}
           </div>
         </header>
+        {ctx && (
+          <div className="flex flex-wrap items-center gap-2 border-b border-brand/20 bg-brand/[0.08] px-4 py-1.5 text-xs text-slate-200 md:px-8">
+            <Crosshair size={13} className="text-brand" />
+            <span>Active project: <b className="text-white">{ctx.name}</b> <span className="font-mono text-slate-400">#{ctx.id}</span>{ctx.isFrozen ? <span className="ml-1 text-sky-300">❄️ frozen</span> : null} — tasks, approvals, activity and new work are scoped to this project.</span>
+            <Link href={`/projects/${ctx.id}`} className="ml-auto text-brand-soft hover:underline">Open project</Link>
+            <button className="text-slate-400 hover:text-white" onClick={() => setProjectId(null)}>Clear</button>
+          </div>
+        )}
         {paused && (
           <div className="border-b border-rose-500/20 bg-rose-500/10 px-4 py-2 text-center text-xs text-rose-200 md:px-8">
             The agency is paused — no new tasks will start until you resume it.

@@ -11,11 +11,11 @@ import { AgentAvatar, Field, HelpText, Modal } from "./ui";
 export function AssignTaskModal({ onClose, onCreated, agentId, projectId, initialTitle = "" }: {
   onClose: () => void; onCreated?: (t: Task) => void; agentId?: number; projectId?: number; initialTitle?: string;
 }) {
-  const { projects } = useSession();
+  const { projects, projectId: ctxProject } = useSession();
   const agents = useApi<Agent[]>("/agents");
   const { run } = useToast();
   const [f, setF] = useState({
-    projectId: String(projectId ?? projects[0]?.id ?? ""), assignedAgentId: agentId ? String(agentId) : "",
+    projectId: String(projectId ?? ctxProject ?? projects[0]?.id ?? ""), assignedAgentId: agentId ? String(agentId) : "",
     title: initialTitle, description: "", priority: "MEDIUM",
   });
   const [busy, setBusy] = useState(false);

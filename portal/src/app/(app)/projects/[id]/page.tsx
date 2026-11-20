@@ -2,15 +2,20 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
-import { ArrowLeft, CircleDashed, FolderGit2, Github, Inbox, Layers, ListChecks, Plus, Rocket, Wand2 } from "lucide-react";
+import { ArrowLeft, CircleDashed, FolderGit2, Github, Layers, ListChecks, Plus, Radio, RefreshCw, Rocket, Wand2 } from "lucide-react";
 import { api, label, ProjectDetail, runJob, Task, timeAgo } from "@/lib/api";
+import { FileExplorer } from "@/components/FileExplorer";
+import { EnvEditor } from "@/components/EnvEditor";
+import { LiveRunDrawer } from "@/components/LiveRun";
+import { ProposalReview } from "@/components/ProposalReview";
+import { DecisionsPanel } from "@/components/Decisions";
 import { useApi } from "@/lib/useApi";
 import { useSession } from "@/lib/session";
 import { useToast } from "@/components/toast";
 import { TaskDrawer } from "@/components/TaskDrawer";
 import { AssignTaskModal } from "@/components/AssignTaskModal";
 import { ProjectActions } from "@/components/ProjectActions";
-import { AgentAvatar, Badge, EmptyState, ErrorBox, Field, HelpText, Modal, Mono, Progress, RISK_TONE, Skeleton, Tabs } from "@/components/ui";
+import { AgentAvatar, Badge, EmptyState, ErrorBox, Field, HelpText, Modal, Mono, Progress, QaBadge, RISK_TONE, Skeleton, Tabs } from "@/components/ui";
 
 const STATUSES = ["PLANNING", "IN_PROGRESS", "REVIEW", "COMPLETED", "FROZEN"];
 const COLUMNS: { status: string; title: string; hint: string; tone: string }[] = [
@@ -20,9 +25,10 @@ const COLUMNS: { status: string; title: string; hint: string; tone: string }[] =
   { status: "DONE", title: "Done", hint: "Approved & merged into main", tone: "border-t-emerald-400" },
 ];
 
-function TaskCard({ t, onOpen, blockedBy }: { t: Task; onOpen: () => void; blockedBy?: number[] }) {
+function TaskCard({ t, onOpen, blockedBy, onWatch, onRetry }: { t: Task; onOpen: () => void; blockedBy?: number[]; onWatch?: () => void; onRetry?: () => void }) {
   return (
-    <button onClick={onOpen} className="w-full rounded-xl border border-white/[0.06] bg-ink-900/80 p-3 text-left transition hover:border-brand/40">
+    <div className="rounded-xl border border-white/[0.06] bg-ink-900/80 transition hover:border-brand/40">
+    <button onClick={onOpen} className="w-full p-3 text-left">
       <div className="flex items-start gap-2">
         <AgentAvatar slug={t.assignedAgent?.slug} size={24} working={t.status === "IN_PROGRESS" && t.assignedAgent?.status === "RUNNING"} />
         <div className="min-w-0 flex-1">
@@ -36,10 +42,17 @@ function TaskCard({ t, onOpen, blockedBy }: { t: Task; onOpen: () => void; block
         </div>
       </div>
     </button>
+    {(onWatch || onRetry) && (
+      <div className="flex gap-1.5 border-t border-white/5 px-3 py-2">
+        {onWatch && <button onClick={onWatch} className="btn-soft !px-2 !py-0.5 text-[11px] text-sky-300"><Radio size={11} className="animate-pulse" /> Watch live</button>}
+        {onRetry && <button onClick={onRetry} className="btn-soft !px-2 !py-0.5 text-[11px] text-orange-300"><RefreshCw size={11} /> Retry</button>}
+      </div>
+    )}
+    </div>
   );
 }
 
-function Pipeline({ p, onOpen }: { p: ProjectDetail; onOpen: (id: number) => void }) {
+function Pipeline({ p, onOpen, onWatch, onRetry }: { p: ProjectDetail; onOpen: (id: number) => void; onWatch: (id: number) => void; onRetry?: (id: number) => void }) {
   const byStatus = (s: string) => p.tasks.filter(t => t.status === s);
   const done = new Set(p.tasks.filter(t => t.status === "DONE").map(t => t.id));
   const other = p.tasks.filter(t => !COLUMNS.some(c => c.status === t.status));
@@ -57,7 +70,8 @@ function Pipeline({ p, onOpen }: { p: ProjectDetail; onOpen: (id: number) => voi
               <p className="mb-3 px-1 text-[11px] text-slate-500">{c.hint}</p>
               <div className="space-y-2">
                 {tasks.length ? tasks.map(t => (
-                  <TaskCard key={t.id} t={t} onOpen={() => onOpen(t.id)} blockedBy={c.status === "READY" ? (t.dependencies ?? []).filter(d => !done.has(d)) : undefined} />
+                  <TaskCard key={t.id} t={t} onOpen={() => onOpen(t.id)} blockedBy={c.status === "READY" ? (t.dependencies ?? []).filter(d => !done.has(d)) : undefined}
+                    onWatch={c.status === "IN_PROGRESS" || c.status === "AWAITING_APPROVAL" ? () => onWatch(t.id) : undefined} />
                 )) : <div className="rounded-xl border border-dashed border-white/10 py-6 text-center text-xs text-slate-600">Empty</div>}
               </div>
             </div>
@@ -66,10 +80,11 @@ function Pipeline({ p, onOpen }: { p: ProjectDetail; onOpen: (id: number) => voi
       </div>
       {!!other.length && (
         <div className="card p-4">
-          <h3 className="mb-1 text-sm font-semibold text-white">Backlog & blocked</h3>
-          <p className="mb-3 text-xs text-slate-500">Backlog tasks aren&apos;t queued yet; blocked tasks failed or were sent back. Open one and set it to Ready to retry.</p>
+          <h3 className="mb-1 text-sm font-semibold text-white">Needs attention · backlog · blocked</h3>
+          <p className="mb-3 text-xs text-slate-500">&quot;Needs retry&quot; tasks were stopped by the watchdog after a timeout (partial work is kept on their branch). Blocked tasks failed or were sent back. Click Retry to queue them again.</p>
           <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-            {other.map(t => <div key={t.id} className="relative"><TaskCard t={t} onOpen={() => onOpen(t.id)} /><span className="absolute right-2 top-2"><Badge value={t.status} /></span></div>)}
+            {other.map(t => <div key={t.id} className="relative"><TaskCard t={t} onOpen={() => onOpen(t.id)} onWatch={t.status === "NEEDS_RETRY" ? () => onWatch(t.id) : undefined}
+              onRetry={onRetry && ["NEEDS_RETRY", "BLOCKED", "BACKLOG"].includes(t.status) ? () => onRetry(t.id) : undefined} /><span className="absolute right-2 top-2"><Badge value={t.status} /></span></div>)}
           </div>
         </div>
       )}
@@ -108,13 +123,24 @@ export default function ProjectPage() {
   const { data: p, error, reload } = useApi<ProjectDetail>(`/projects/${id}`, 5000);
   const { canWrite, refreshProjects } = useSession();
   const { run } = useToast();
-  const [tab, setTab] = useState<"pipeline" | "proposals" | "details">("pipeline");
+  const [tab, setTab] = useState<"pipeline" | "files" | "env" | "proposals" | "decisions" | "details">("pipeline");
   const [openTask, setOpenTask] = useState<number | null>(null);
+  const [watch, setWatch] = useState<number | null>(null);
+  const [review, setReview] = useState<number | null>(null);
   const [assign, setAssign] = useState(false);
   const [autoBuild, setAutoBuild] = useState(false);
 
   async function patch(body: object, msg: string) {
     if (await run(() => api(`/projects/${id}`, { method: "PATCH", body }), msg)) { reload(); refreshProjects(); }
+  }
+
+  async function freeze(frozen: boolean) {
+    if (frozen && !window.confirm(`Freeze ${p!.name}? Running agent jobs on it are cancelled and re-queued, no new tasks start, and approved merges are held.`)) return;
+    if (await run(() => api(`/projects/${id}/freeze`, { method: "POST", body: { frozen } }), frozen ? "Project frozen" : "Project unfrozen")) { reload(); refreshProjects(); }
+  }
+
+  async function retry(taskId: number) {
+    if (await run(() => api(`/tasks/${taskId}/retry`, { method: "POST" }), `Task #${taskId} re-queued`)) reload();
   }
 
   if (error && !p) return <ErrorBox message={error} />;
@@ -136,12 +162,21 @@ export default function ProjectPage() {
               {p.githubRepoUrl && <a href={p.githubRepoUrl} target="_blank" rel="noreferrer noopener" className="flex items-center gap-1.5 hover:text-white"><Github size={13} /> {p.githubRepoUrl.replace("https://github.com/", "")}</a>}
             </div>
           </div>
+          <div className="flex flex-wrap items-center gap-2">
+          {canWrite && (
+            <button onClick={() => freeze(!p.isFrozen)} title={p.isFrozen ? "Resume agent work and merges on this project" : "Emergency stop: agents stop working on this project (running jobs are cancelled) and approved merges are held"}
+              className={`btn !py-1.5 text-xs ${p.isFrozen ? "border border-sky-400/40 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25" : "btn-ghost"}`}>
+              {p.isFrozen ? "❄️ Frozen — Unfreeze" : "❄️ Freeze project"}
+            </button>
+          )}
           {canWrite ? (
             <select className="input !w-auto" value={p.status} onChange={e => patch({ status: e.target.value }, `Status set to ${label(e.target.value)}`)} aria-label="Project status">
               {STATUSES.map(s => <option key={s} value={s}>{label(s)}</option>)}
             </select>
           ) : <Badge value={p.status} />}
+          </div>
         </div>
+        {p.isFrozen && <p className="mt-3 rounded-xl border border-sky-400/30 bg-sky-500/10 px-3 py-2 text-sm text-sky-100">❄️ This project is frozen: agents will not start tasks here, running jobs were stopped and re-queued, and approved merges are held until you unfreeze it.</p>}
         <div className="mt-4 max-w-xl">
           <div className="mb-1.5 flex justify-between text-xs text-slate-400"><span>{done}/{total} tasks merged</span><span>{total ? Math.round((done / total) * 100) : 0}%</span></div>
           <Progress value={total ? (done / total) * 100 : 0} />
@@ -153,11 +188,16 @@ export default function ProjectPage() {
       </div>
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <Tabs value={tab} onChange={setTab} tabs={[
-          { id: "pipeline", label: "Tasks & Pipeline", count: total },
-          { id: "proposals", label: "Proposals", count: p.proposals.length },
-          { id: "details", label: "Details" },
-        ]} />
+        <div className="max-w-full overflow-x-auto">
+          <Tabs value={tab} onChange={setTab} tabs={[
+            { id: "pipeline", label: "Pipeline & Tasks", count: total },
+            { id: "files", label: "Files & Code" },
+            { id: "env", label: "Environment (.env)" },
+            { id: "proposals", label: "Approvals & QA", count: pending.length || undefined },
+            { id: "decisions", label: "Decisions / Knowledge" },
+            { id: "details", label: "Details" },
+          ]} />
+        </div>
         {canWrite && (
           <div className="flex gap-2">
             <button className="btn-ghost" onClick={() => setAssign(true)}><Plus size={15} /> Assign task</button>
@@ -166,32 +206,42 @@ export default function ProjectPage() {
         )}
       </div>
 
-      {tab === "pipeline" && (total ? <Pipeline p={p} onOpen={setOpenTask} /> : (
+      {tab === "pipeline" && (total ? <Pipeline p={p} onOpen={setOpenTask} onWatch={setWatch} onRetry={canWrite ? retry : undefined} /> : (
         <EmptyState icon={ListChecks} title="No tasks yet" text="Launch an auto-build with a goal, or assign a single task to one of your agents."
           action={canWrite && <div className="flex gap-2"><button className="btn-ghost" onClick={() => setAssign(true)}><Plus size={15} /> Assign task</button><button className="btn-primary" onClick={() => setAutoBuild(true)}><Rocket size={15} /> Auto-build</button></div>} />
       ))}
 
+      {tab === "decisions" && <DecisionsPanel projectId={p.id} projectName={p.name} />}
+      {tab === "files" && <FileExplorer projectId={p.id} workspaceExists={p.workspaceExists !== false} />}
+      {tab === "env" && (canWrite ? <EnvEditor projectId={p.id} workspaceExists={p.workspaceExists !== false} /> : <div className="card p-8 text-center text-sm text-slate-400">Only the CEO and admins can view environment variables.</div>)}
+
       {tab === "proposals" && (p.proposals.length ? (
-        <div className="space-y-3">
-          {!!pending.length && <Link href="/approvals" className="flex items-center gap-2 rounded-xl border border-brand/30 bg-brand/10 px-4 py-3 text-sm text-white hover:bg-brand/15"><Inbox size={16} className="text-brand" /> {pending.length} proposal(s) need your decision — open the Approval Inbox →</Link>}
-          {p.proposals.map(x => (
-            <div key={x.id} className="card flex flex-wrap items-center gap-3 p-4">
-              <AgentAvatar slug={x.requestingAgent.slug} size={30} />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm text-slate-100">{x.task?.title ?? x.actionType}</div>
-                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                  <span>#{x.id} · {x.requestingAgent.name}</span>{x.branchName && <Mono>{x.branchName}</Mono>}
-                  <span className={`rounded-full border px-2 py-0.5 text-[10px] ${RISK_TONE[x.riskLevel] ?? ""}`}>{x.riskLevel} risk</span>
-                  <span>{timeAgo(x.createdAt)}</span>
-                  {x.mergeStatus === "MERGED" && x.mergeCommit && <span className="text-emerald-300">merged <span className="font-mono">{x.mergeCommit.slice(0, 8)}</span></span>}
-                  {x.mergeStatus === "FAILED" && <span className="text-rose-300">merge failed</span>}
-                </div>
-              </div>
-              <Badge value={x.status} />
-            </div>
-          ))}
+        <div className="grid gap-4 lg:grid-cols-[22rem_1fr]">
+          <ul className={`space-y-2 ${review ? "hidden lg:block" : ""}`}>
+            {p.proposals.map(x => (
+              <li key={x.id}>
+                <button onClick={() => setReview(x.id)} className={`w-full rounded-2xl border p-3 text-left transition ${review === x.id ? "border-brand/50 bg-brand/[0.08]" : "border-white/[0.06] bg-ink-800/70 hover:border-white/15"}`}>
+                  <div className="flex items-center gap-2.5">
+                    <AgentAvatar slug={x.requestingAgent.slug} size={28} />
+                    <div className="min-w-0 flex-1"><div className="truncate text-sm text-slate-100">{x.task?.title ?? x.actionType}</div><div className="text-xs text-slate-500">#{x.id} · {x.requestingAgent.name} · {timeAgo(x.createdAt)}</div></div>
+                    <Badge value={x.mergeStatus === "MERGED" ? "DONE" : x.status} text={x.mergeStatus === "MERGED" ? "Merged" : undefined} />
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <span className={`rounded-full border px-2 py-0.5 ${RISK_TONE[x.riskLevel] ?? ""}`}>{x.riskLevel}</span>
+                    <QaBadge qa={x.qaReport} compact />
+                    {x.branchName && <Mono>{x.branchName}</Mono>}
+                    {!!x.changedFiles?.length && <span className="text-slate-500">{x.changedFiles.length} files</span>}
+                  </div>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className={review ? "" : "hidden lg:block"}>
+            {(() => { const cur = p.proposals.find(x => x.id === review) ?? (typeof window !== "undefined" && window.innerWidth >= 1024 ? p.proposals.find(x => x.status === "PENDING") ?? p.proposals[0] : undefined);
+              return cur ? <ProposalReview key={cur.id} p={{ ...cur, project: { id: p.id, name: p.name } }} onDecided={reload} onBack={() => setReview(null)} /> : <div className="card grid h-64 place-items-center text-sm text-slate-500">Select a proposal to review it</div>; })()}
+          </div>
         </div>
-      ) : <EmptyState icon={CircleDashed} title="No proposals yet" text="When an agent finishes a task it submits a proposal here and in the Approval Inbox." />)}
+      ) : <EmptyState icon={CircleDashed} title="No proposals yet" text="When an agent finishes a task it runs the automated QA gate and submits a proposal here and in the Approval Inbox." />)}
 
       {tab === "details" && (
         <div className="card grid gap-4 p-5 text-sm sm:grid-cols-2">
@@ -204,6 +254,7 @@ export default function ProjectPage() {
         </div>
       )}
 
+      {watch && <LiveRunDrawer taskId={watch} onClose={() => setWatch(null)} />}
       {openTask && <TaskDrawer taskId={openTask} onClose={() => setOpenTask(null)} onChanged={reload} />}
       {assign && <AssignTaskModal projectId={p.id} onClose={() => setAssign(false)} onCreated={() => reload()} />}
       {autoBuild && <AutoBuildModal p={p} onClose={() => setAutoBuild(false)} onDone={reload} />}
