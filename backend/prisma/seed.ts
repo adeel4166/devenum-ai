@@ -3,7 +3,6 @@ import bcrypt from "bcryptjs";
 import { Department, ModelProvider, Prisma, PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
-const day = 24 * 3600 * 1000;
 
 /** Role-based default Claude models: deep planning → opus, coding/design/security → sonnet, fast ops/QA/assistant → haiku. */
 export const ROLE_MODELS: Record<string, "opus" | "sonnet" | "haiku"> = {
@@ -62,12 +61,11 @@ const agents: Def[] = [
 
 async function main() {
   const passwordHash = await bcrypt.hash("Admin@12345", 12);
-  const ceo = await prisma.user.upsert({
+  await prisma.user.upsert({
     where: { email: "ceo@devenum.com" }, update: {},
     create: { name: "Devenum CEO", email: "ceo@devenum.com", passwordHash, role: "CEO" },
   });
 
-  const byslug: Record<string, number> = {};
   for (const a of agents) {
     const manifest: Prisma.InputJsonObject = {
       allowedTools: a.tools,
@@ -76,71 +74,16 @@ async function main() {
       timeoutSeconds: a.timeoutSeconds,
       notes: a.notes,
     };
-    const row = await prisma.agent.upsert({
+    await prisma.agent.upsert({
       where: { slug: a.slug }, update: {},
       create: { slug: a.slug, name: a.name, roleTitle: a.roleTitle, department: a.department, modelProvider: a.modelProvider, model: ROLE_MODELS[a.slug] ?? "sonnet", manifest },
     });
-    byslug[a.slug] = row.id;
   }
 
-  // Demo data only on first setup.
-  if ((await prisma.project.count()) > 0) { console.log("Demo data already present, skipping."); return; }
-
-  const project = await prisma.project.create({
-    data: {
-      name: "Devenum E-Commerce MVP", slug: "devenum-e-commerce-mvp", category: "WEB",
-      description: "Storefront MVP with catalog, cart, checkout and an admin back office.",
-      techStack: "Next.js, Node.js, Prisma, MySQL, Stripe", repoPath: "C:/projects/devenum-ecommerce", gitBranch: "develop",
-      status: "IN_PROGRESS", progressPercent: 35,
-    },
-  });
-
-  const mk = (title: string, description: string, status: never, agent: string, priority: never, extra: object = {}) =>
-    prisma.task.create({ data: { projectId: project.id, assignedAgentId: byslug[agent], title, description, status, priority, ...extra } });
-
-  await mk("Design system architecture & ADRs", "Define service boundaries, data model and ADRs for the MVP.", "DONE" as never, "software-architect", "HIGH" as never,
-    { outputSummary: "Published 4 ADRs and the C4 container diagram.", executionTimeMs: 412_000 });
-  const apiTask = await mk("Implement product catalog API", "CRUD + search endpoints for products and categories.", "AWAITING_APPROVAL" as never, "backend-developer", "HIGH" as never);
-  const feTask = await mk("Build storefront product listing page", "Responsive grid with filters and pagination.", "IN_PROGRESS" as never, "frontend-developer", "MEDIUM" as never);
-  const devopsTask = await mk("Set up staging deployment pipeline", "Dockerize apps and configure CI for staging.", "AWAITING_APPROVAL" as never, "devops-engineer", "CRITICAL" as never);
-  await mk("Write checkout E2E test plan", "Cover cart, payment and order confirmation flows.", "BACKLOG" as never, "qa-engineer", "LOW" as never);
-
-  await prisma.agent.update({ where: { id: byslug["frontend-developer"] }, data: { status: "RUNNING", currentTaskId: feTask.id, totalRuns: 7 } });
-  await prisma.agent.update({ where: { id: byslug["backend-developer"] }, data: { status: "WAITING_APPROVAL", currentTaskId: apiTask.id, totalRuns: 9 } });
-  await prisma.agent.update({ where: { id: byslug["devops-engineer"] }, data: { status: "WAITING_APPROVAL", currentTaskId: devopsTask.id, totalRuns: 3 } });
-  await prisma.agent.update({ where: { id: byslug["software-architect"] }, data: { totalRuns: 5 } });
-
-  await prisma.proposal.create({ data: {
-    projectId: project.id, taskId: apiTask.id, requestingAgentId: byslug["backend-developer"], actionType: "DB_MIGRATION",
-    targetResource: "mysql://devenum_ecommerce (Product, Category tables)",
-    scopeSummary: "Create Product and Category tables with indexes on slug, categoryId and price.",
-    rationale: "The catalog API needs persistent storage; no existing tables are altered.",
-    riskLevel: "MEDIUM", rollbackPlan: "Run the generated down-migration (DROP TABLE Product, Category). No data exists yet, so no data loss.",
-    validationPlan: "Run migrations on a clean database, execute the API integration suite, and verify schema diff is empty.",
-    expiresAt: new Date(Date.now() + 2 * day),
-  } });
-  await prisma.proposal.create({ data: {
-    projectId: project.id, taskId: devopsTask.id, requestingAgentId: byslug["devops-engineer"], actionType: "DEPLOY_STAGING",
-    targetResource: "staging.devenum-ecommerce.internal",
-    scopeSummary: "Deploy containerized frontend and backend to the staging host via GitHub Actions.",
-    rationale: "Stakeholders need a shareable build to review the MVP; staging is isolated from production.",
-    riskLevel: "HIGH", rollbackPlan: "Redeploy the previous image tag; staging database is snapshotted before each deploy.",
-    validationPlan: "Health-check endpoints, smoke tests on login and catalog, and a log review for errors for 15 minutes.",
-    expiresAt: new Date(Date.now() + 1 * day),
-  } });
-
-  await prisma.agentRun.createMany({ data: [
-    { agentId: byslug["software-architect"], status: "SUCCEEDED", queuedMs: 800, executionMs: 412_000, logs: "Analysed requirements\nDrafted ADR-001..004\nExported C4 diagram", startedAt: new Date(Date.now() - 3 * 3600_000), finishedAt: new Date(Date.now() - 3 * 3600_000 + 412_000) },
-    { agentId: byslug["frontend-developer"], status: "RUNNING", queuedMs: 1200, executionMs: 95_000, logs: "Scaffolded ProductGrid\nAdded filter sidebar\nRunning component tests...", startedAt: new Date(Date.now() - 600_000) },
-    { agentId: byslug["backend-developer"], status: "FAILED", queuedMs: 500, executionMs: 38_000, logs: "Generated Prisma models\nAttempted migration", errorMessage: "Blocked: DB_MIGRATION requires CEO approval", startedAt: new Date(Date.now() - 1800_000), finishedAt: new Date(Date.now() - 1800_000 + 38_000) },
-  ] });
-
-  await prisma.auditEvent.createMany({ data: [
-    { actorType: "SYSTEM", actorId: null, action: "SYSTEM_SEEDED", target: "database", details: { agents: agents.length } },
-    { actorType: "CEO", actorId: String(ceo.id), action: "PROJECT_CREATED", target: `project:${project.slug}`, details: { category: "WEB" } },
-    { actorType: "AGENT", actorId: "backend-developer", action: "PROPOSAL_SUBMITTED", target: "DB_MIGRATION", details: { riskLevel: "MEDIUM" } },
-    { actorType: "AGENT", actorId: "devops-engineer", action: "PROPOSAL_SUBMITTED", target: "DEPLOY_STAGING", details: { riskLevel: "HIGH" } },
-  ] });
+  // No demo projects: a fresh install starts with an empty dashboard (CEO user + the agent team only).
+  if (!(await prisma.auditEvent.findFirst({ where: { action: "SYSTEM_SEEDED" } }))) {
+    await prisma.auditEvent.create({ data: { actorType: "SYSTEM", actorId: null, action: "SYSTEM_SEEDED", target: "database", details: { agents: agents.length } } });
+  }
   console.log("Seed complete. Login: ceo@devenum.com / Admin@12345");
 }
 
