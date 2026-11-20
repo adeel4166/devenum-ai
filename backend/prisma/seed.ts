@@ -46,6 +46,10 @@ const agents: Def[] = [
   { slug: "devops-engineer", name: "DevOps Engineer", roleTitle: "DevOps Engineer", department: "DEVOPS", modelProvider: "CLAUDE_CODE",
     tools: ["fs.read", "fs.write:infra", "shell.run:docker", "ci.configure", "proposal.create"], maxSteps: 70, timeoutSeconds: 2400,
     extraProhibited: ["deploy to production", "deploy to staging without approved DEPLOY_STAGING proposal"], notes: "CI/CD, containers, staging deployments." },
+  { slug: "executive-assistant", name: "Executive Assistant", roleTitle: "General Assistant", department: "LEADERSHIP", modelProvider: "CLAUDE_CODE",
+    tools: ["chat.reply", "brainstorm.ideas", "qa.technical", "plan.project", "prompt.refine", "fs.read"], maxSteps: 20, timeoutSeconds: 600,
+    extraProhibited: ["write or modify source code", "create git branches or proposals from chat", "make commitments on the CEO's behalf"],
+    notes: "CEO's conversational partner: brainstorming, technical Q&A, project planning (break goals into tasks for the other agents), and refining prompts/task descriptions. Concise, practical, asks clarifying questions when needed." },
 ];
 
 async function main() {

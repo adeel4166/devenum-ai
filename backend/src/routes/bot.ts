@@ -36,7 +36,7 @@ botRouter.get("/status", wrap(async (_req, res) => {
 }));
 
 botRouter.get("/agents", wrap(async (_req, res) => {
-  res.json(await prisma.agent.findMany({ orderBy: { id: "asc" }, select: { id: true, slug: true, name: true, status: true, modelProvider: true } }));
+  res.json(await prisma.agent.findMany({ orderBy: { id: "asc" }, select: { id: true, slug: true, name: true, roleTitle: true, status: true, modelProvider: true, manifest: true } }));
 }));
 
 botRouter.post("/projects", wrap(async (req, res) => {

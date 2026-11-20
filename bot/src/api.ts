@@ -13,7 +13,7 @@ export interface Status {
   runningAgents: { id: number; name: string; slug: string; currentTaskId: number | null }[];
   pendingApprovals: number; readyTasks: number; globalPaused: boolean;
 }
-export interface AgentRow { id: number; slug: string; name: string; status: string; modelProvider: string }
+export interface AgentRow { id: number; slug: string; name: string; roleTitle: string; status: string; modelProvider: string; manifest: unknown }
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
