@@ -6,6 +6,7 @@ import { audit } from "../audit";
 import { wrap } from "../http";
 import { allPreviews, githubConfigured } from "../services/ops";
 import { devenumServices, vpsMetrics } from "../services/sysops";
+import { getClaudeAuth } from "../services/claudeAuth";
 
 export const systemRouter = Router();
 const writers = requireRole("CEO", "ADMIN");
@@ -57,7 +58,8 @@ systemRouter.put("/settings", writers, wrap(async (req, res) => {
 }));
 
 systemRouter.get("/status", wrap(async (_req, res) => {
-  res.json({ globalPaused: (await loadSettings()).globalPaused });
+  const auth = await getClaudeAuth();
+  res.json({ globalPaused: (await loadSettings()).globalPaused, claudeAuth: { ok: auth.ok, detectedAt: auth.detectedAt, source: auth.source } });
 }));
 
 systemRouter.post("/pause-all", writers, wrap(async (req, res) => {
@@ -125,6 +127,7 @@ systemRouter.get("/health", wrap(async (_req, res) => {
     worker: beat("heartbeat:worker", 30_000),
     bot: beat("heartbeat:bot", 45_000),
     github: { configured: githubConfigured() },
+    claudeAuth: await getClaudeAuth(),
     previews: allPreviews(),
     vps: await vpsMetrics().catch(() => null),
     services: await devenumServices().catch(() => []),

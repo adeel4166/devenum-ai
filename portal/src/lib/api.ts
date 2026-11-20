@@ -99,6 +99,7 @@ export interface Health {
   worker: { ok: boolean; lastSeen: string | null; info: { activeRuns?: number; paused?: boolean } | null };
   bot: { ok: boolean; lastSeen: string | null; info: { user?: string } | null };
   github: { configured: boolean }; previews: PreviewInfo[];
+  claudeAuth?: { ok: boolean; detectedAt: string | null; source: string | null; recoveredAt: string | null };
   vps: VpsMetrics | null; services: ServiceInfo[];
 }
 export interface Kpis { activeProjects: number; runningAgents: number; idleAgents: number; pendingApprovals: number; totalAgents: number; completedRuns: number }

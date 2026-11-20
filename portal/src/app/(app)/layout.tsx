@@ -69,7 +69,8 @@ function Shell({ children }: { children: React.ReactNode }) {
   const { canWrite, projects, projectId, setProjectId } = useSession();
   const ctx = projects.find(p => p.id === projectId) ?? null;
   useEffect(() => { if (projectId && projects.length && !ctx) setProjectId(null); }, [projectId, projects, ctx, setProjectId]); // project was deleted
-  const status = useApi<{ globalPaused: boolean }>("/system/status", 8000);
+  const status = useApi<{ globalPaused: boolean; claudeAuth?: { ok: boolean; detectedAt: string | null; source: string | null } }>("/system/status", 8000);
+  const authDown = status.data?.claudeAuth && !status.data.claudeAuth.ok;
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -134,6 +135,12 @@ function Shell({ children }: { children: React.ReactNode }) {
             )}
           </div>
         </header>
+        {authDown && (
+          <div role="alert" className="border-b border-rose-500/40 bg-rose-600/20 px-4 py-2 text-center text-sm text-rose-100 md:px-8">
+            🚨 <b>Claude CLI session expired</b> — agents can&apos;t run and new tasks are on hold. Run <span className="mono-badge">/claude-login</span> in Discord to reconnect.
+            {status.data?.claudeAuth?.detectedAt && <span className="ml-2 text-xs text-rose-200/70">detected {new Date(status.data.claudeAuth.detectedAt).toLocaleString()}</span>}
+          </div>
+        )}
         {ctx && (
           <div className="flex flex-wrap items-center gap-2 border-b border-brand/20 bg-brand/[0.08] px-4 py-1.5 text-xs text-slate-200 md:px-8">
             <Crosshair size={13} className="text-brand" />

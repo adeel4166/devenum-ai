@@ -9,7 +9,7 @@ const ts = (iso: string) => `<t:${Math.floor(new Date(iso).getTime() / 1000)}:R>
 export const ACTIONS = ["approve", "reject", "rejectmodal", "proposal_revise", "proposal_revise_modal",
   "gh_push_private", "gh_push_public", "gh_push_skip", "preview_stop",
   "task_retry", "project_delete_confirm", "project_delete_cancel", "deploy_stop", "sys_restart", "pm_dispatch", "pm_discard",
-  "pin_decision", "pin_decision_modal"] as const;
+  "pin_decision", "pin_decision_modal", "claude_code", "claude_code_modal"] as const;
 /** Index → service for the /system restart buttons (custom ids carry a number). */
 export const CORE_SERVICES = ["devenum-backend", "devenum-worker", "devenum-bot", "devenum-portal"];
 export type Action = (typeof ACTIONS)[number];

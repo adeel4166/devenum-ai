@@ -12,6 +12,7 @@ import { Actor, AgentRow, ApiError, BackendApi, MergedProposal, PreviewInfo, Tea
 import { chat, chunks } from "./chat";
 import { BADGE, channelAgent, findAddressedAgent, sendAs, setupTeamChannels } from "./agents";
 import { syncProjects } from "./projectsync";
+import { authStatus, startLogin, submitCode } from "./claudeLogin";
 import {
   CORE_SERVICES, decisionButtons, deleteConfirmButtons, deployButtons, githubButtons, ids, previewButtons, proposalEmbed, retryButton,
   statusEmbed, systemButtons, systemEmbed,
@@ -97,6 +98,7 @@ function buildCommands() {
       .addIntegerOption(projectOpt)
       .addBooleanOption(o => o.setName("unfreeze").setDescription("Set true to unfreeze").setRequired(false)),
     new SlashCommandBuilder().setName("report-daily").setDescription("Generate the CEO executive digest now"),
+    new SlashCommandBuilder().setName("claude-login").setDescription("Re-authenticate the Claude CLI used by all agents (sends you a private login link)"),
     new SlashCommandBuilder().setName("setup-channels").setDescription(`Create the team category and one channel per agent (if missing)`),
   ].map(c => c.toJSON());
 }
@@ -262,6 +264,25 @@ async function onCommand(i: ChatInputCommandInteraction) {
   }
   if (i.commandName === "ask") return onAsk(i);
   if (i.commandName === "chat-agent") return onChatAgent(i);
+  if (i.commandName === "claude-login") {
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      const before = await authStatus();
+      const s = await startLogin(i.user.tag);
+      log("info", "claude login started", { by: i.user.tag, wasLoggedIn: before.loggedIn });
+      await i.editReply({
+        content: [`🔐 **Claude CLI re-login** (only you can see this)`, before.loggedIn ? `-# The CLI currently reports logged in as ${before.email ?? "?"}; continuing replaces that login.` : "",
+          "1. Open the link below and sign in with the Claude account the agents should use.",
+          "2. Copy the authorization code shown at the end.",
+          "3. Click **Enter code** and paste it. The link expires in 10 minutes."].filter(Boolean).join("\n"),
+        components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setLabel("Open login page").setStyle(ButtonStyle.Link).setURL(s.url),
+          new ButtonBuilder().setCustomId(ids.make("claude_code", s.id)).setLabel("Enter code").setEmoji("🔑").setStyle(ButtonStyle.Primary),
+        )],
+      });
+    } catch (e) { await i.editReply(`❌ ${errText(e)}`); }
+    return;
+  }
   if (i.commandName === "decide") {
     await i.deferReply();
     try {
@@ -532,6 +553,12 @@ async function onButton(i: ButtonInteraction) {
       }
       return;
     }
+    case "claude_code": {
+      const modal = new ModalBuilder().setCustomId(ids.make("claude_code_modal", id)).setTitle("Claude CLI authorization code").addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("code").setLabel("Paste the code from the login page").setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1000)),
+      );
+      return i.showModal(modal);
+    }
     case "pin_decision": {
       const modal = new ModalBuilder().setCustomId(ids.make("pin_decision_modal", id)).setTitle("Pin as project decision").addComponents(
         new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId("project_id").setLabel("Project ID").setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(10).setValue(id ? String(id) : "")),
@@ -565,6 +592,17 @@ async function onModal(i: ModalSubmitInteraction) {
       await api.reject(parsed.id, actor, reason || undefined);
       log("info", "proposal rejected", { proposalId: parsed.id, by: i.user.tag });
       await markDecided(i, parsed.id, `❌ Rejected by <@${i.user.id}>${reason ? `: ${reason.slice(0, 900)}` : ""}`, 0xef4444);
+    } else if (parsed.action === "claude_code_modal") {
+      await i.deferReply({ flags: MessageFlags.Ephemeral });
+      try {
+        const r = await submitCode(parsed.id, i.fields.getTextInputValue("code"));
+        if (r.loggedIn) {
+          await api.claudeAuthRecovered(actor).catch(() => undefined);
+          log("info", "claude login completed", { by: i.user.tag, email: r.email });
+          await i.editReply(`✅ Claude CLI is logged in${r.email ? ` as **${r.email}**` : ""}. Agents can work again — the worker resumes picking up tasks within a few seconds.`);
+        } else await i.editReply(`❌ Login did not complete. ${r.detail ? `CLI said: ${r.detail}` : ""}\nRun /claude-login to try again.`);
+      } catch (e) { await i.editReply(`❌ ${(e as Error).message}`); }
+      return;
     } else if (parsed.action === "pin_decision_modal") {
       const pid = Number(i.fields.getTextInputValue("project_id").trim());
       if (!Number.isInteger(pid) || pid <= 0) return void (await i.reply({ content: "❌ Enter a valid project ID (see /status).", flags: MessageFlags.Ephemeral }));
@@ -628,12 +666,24 @@ async function poll() {
     const hb = await api.heartbeat(client.user?.tag ?? "devenum-bot");
     githubEnabled = hb.github;
     const [proposals, merges, timeouts] = await Promise.all([api.unnotifiedProposals(), api.unpromptedMerges(), api.timeoutAlerts()]);
-    if (!proposals.length && !merges.length && !timeouts.length) return;
+    const authState = await api.claudeAuth().catch(() => null);
+    const authNeedsPost = !!authState && ((!authState.ok && !authState.alertedAt) || (authState.ok && !!authState.alertedAt && !!authState.recoveredAt && !authState.recoveryNotifiedAt));
+    if (!proposals.length && !merges.length && !timeouts.length && !authNeedsPost) return;
     const channel = await approvalChannel();
     for (const p of proposals) {
       const msg = await channel.send({ content: `🔔 **New proposal awaiting CEO approval** — ${p.riskLevel} risk`, embeds: [proposalEmbed(p)], components: [decisionButtons(p.id)] });
       await api.markNotified(p.id, msg.id);
       log("info", "proposal announced", { proposalId: p.id, messageId: msg.id });
+    }
+    // Claude CLI auth watchdog: one alert per incident, plus a recovery notice.
+    const auth = authState;
+    if (auth && !auth.ok && !auth.alertedAt) {
+      await channel.send({ content: `🚨 **Claude CLI session expired! Run /claude-login to reconnect.**\nAgents cannot run until you re-authenticate — new tasks are on hold and affected tasks were re-queued.\n-# Detected ${auth.detectedAt ? `<t:${Math.floor(new Date(auth.detectedAt).getTime() / 1000)}:R>` : ""} via ${auth.source ?? "?"}: ${(auth.message ?? "").replace(/\s+/g, " ").slice(0, 200)}`, allowedMentions: { parse: [] } });
+      await api.claudeAuthAlerted("failure");
+      log("warn", "claude auth alert sent", { source: auth.source });
+    } else if (auth && auth.ok && auth.alertedAt && auth.recoveredAt && !auth.recoveryNotifiedAt) {
+      await channel.send("✅ **Claude CLI reconnected** — agents are back to work.");
+      await api.claudeAuthAlerted("recovery");
     }
     for (const t of timeouts) {
       const task = t.task;

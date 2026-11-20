@@ -4,6 +4,7 @@ import { ExecResult } from "./exec";
 import { checkoutTaskBranch, commitAndDescribe, payloadHash, prepareRepo, taskBranch, workspacePath, BranchResult } from "./git";
 import { buildPrompt, Manifest, pickProvider, Provider, runClaude, runGemini, section } from "./providers";
 import { QaReport, runQa } from "./qa";
+import { looksLikeAuthError, reportAuthFailure } from "./claudeAuth";
 
 /** MySQL TEXT holds 65,535 bytes; keep head + tail of long text within a byte budget. */
 export function clip(s: string, maxBytes = 60_000): string {
@@ -103,9 +104,15 @@ export async function executeTask(task: FullTask, runId: number, provider: Provi
       ? await runGemini(prompt, settings.geminiApiKey, ws, task.id, agent.slug, timeoutSec * 1000, signal)
       : await runClaude(prompt, ws, timeoutSec * 1000, signal, onOutput);
 
+    // Expired/logged-out Claude CLI: not the agent's fault — re-queue the task and raise the auth alert.
+    if (provider === "CLAUDE_CODE" && result.code !== 0 && !result.timedOut && looksLikeAuthError(`${result.stderr}\n${result.stdout}`)) {
+      await reportAuthFailure(`task #${task.id} (${agent.slug})`, `${result.stderr}\n${result.stdout}`);
+      result.aborted = true;
+      errorMessage = "Claude CLI session expired — task re-queued. Run /claude-login in Discord to reconnect.";
+    }
     const watchdog = signal.aborted && signal.reason === "watchdog";
     if (watchdog) { result.timedOut = true; result.aborted = false; }
-    if (result.aborted) errorMessage = "Cancelled: agent was paused/disabled or the system was paused during the run";
+    if (result.aborted && !errorMessage) errorMessage = "Cancelled: agent was paused/disabled or the system was paused during the run";
     else if (result.timedOut) errorMessage = watchdog ? `Watchdog: run exceeded ${timeoutSec}s + 60s buffer and was terminated` : `Timed out after ${timeoutSec}s`;
     else if (result.code !== 0) errorMessage = `${provider} exited with code ${result.code}: ${result.stderr.trim().slice(-1500)}`;
 

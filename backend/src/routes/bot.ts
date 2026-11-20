@@ -11,6 +11,7 @@ import { chatAttachments, chatTurns, startChatJob } from "./chat";
 import { getJob, startJob } from "../services/jobs";
 import { discardPlan, dispatchPlan, getPlan, pmChat } from "../services/teamplan";
 import { generateDailyReport } from "../services/reports";
+import { getClaudeAuth, markAlerted, reportClaudeAuthOk } from "../services/claudeAuth";
 import { pinDecision, setFrozen } from "../services/ops";
 import { devenumServices, restartService, vpsMetrics } from "../services/sysops";
 import {
@@ -317,4 +318,19 @@ botRouter.post("/discord/cleanup/ack", wrap(async (req, res) => {
 
 botRouter.get("/discord/channels", wrap(async (_req, res) => {
   res.json(await prisma.project.findMany({ where: { discordChannelId: { not: null } }, select: { id: true, discordChannelId: true } }));
+}));
+
+/* ---------------- Claude CLI auth watchdog ---------------- */
+
+botRouter.get("/claude-auth", wrap(async (_req, res) => { res.json(await getClaudeAuth()); }));
+botRouter.post("/claude-auth/alerted", wrap(async (req, res) => {
+  const { kind } = z.object({ kind: z.enum(["failure", "recovery"]) }).parse(req.body);
+  await markAlerted(kind);
+  res.json({ ok: true });
+}));
+/** Called by the bot after a successful /claude-login. */
+botRouter.post("/claude-auth/recovered", wrap(async (req, res) => {
+  await reportClaudeAuthOk(`/claude-login by ${discordContext(req).discordUserTag}`);
+  await audit("DISCORD_CEO", discordContext(req).discordUserId, "CLAUDE_RELOGIN", "claude-cli", discordContext(req));
+  res.json(await getClaudeAuth());
 }));

@@ -128,6 +128,9 @@ export class BackendApi {
   markTaskPosted = (id: number, status: string, threadId?: string) => this.req("POST", `/tasks/${id}/discord`, { status, threadId });
   discordCleanup = () => this.req<{ channelIds: string[] }>("GET", "/discord/cleanup");
   discordCleanupAck = (channelIds: string[]) => this.req("POST", "/discord/cleanup/ack", { channelIds });
+  claudeAuth = () => this.req<{ ok: boolean; detectedAt: string | null; source: string | null; message: string | null; alertedAt: string | null; recoveredAt: string | null; recoveryNotifiedAt: string | null }>("GET", "/claude-auth");
+  claudeAuthAlerted = (kind: "failure" | "recovery") => this.req("POST", "/claude-auth/alerted", { kind });
+  claudeAuthRecovered = (actor: Actor) => this.req("POST", "/claude-auth/recovered", {}, actor);
   timeoutAlerts = () => this.req<TimeoutAlert[]>("GET", "/alerts/timeouts");
   markAlerted = (runId: number) => this.req("POST", `/runs/${runId}/alerted`, {});
 

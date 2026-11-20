@@ -159,6 +159,8 @@ function HealthPanel({ canWrite }: { canWrite: boolean }) {
           <HealthRow icon={Database} name="Database (MySQL)" ok={h ? h.database.ok : null} detail="Projects, tasks, approvals" />
           <HealthRow icon={Workflow} name="Execution worker" ok={h ? h.worker.ok : null} detail={h ? `${seen(h.worker.lastSeen)}${h.worker.info?.activeRuns != null ? ` · ${h.worker.info.activeRuns} active run(s)` : ""}` : "checking…"} />
           <HealthRow icon={Bot} name="Discord bot" ok={h ? h.bot.ok : null} detail={h ? `${h.bot.info?.user ?? "devenum-bot"} · ${seen(h.bot.lastSeen)}` : "checking…"} />
+          <HealthRow icon={KeyRound} name="Claude CLI session" ok={h ? h.claudeAuth?.ok ?? true : null}
+            detail={h?.claudeAuth && !h.claudeAuth.ok ? `Expired — run /claude-login in Discord (since ${h.claudeAuth.detectedAt ? timeAgo(h.claudeAuth.detectedAt) : "?"})` : h?.claudeAuth?.recoveredAt ? `Logged in · last re-login ${timeAgo(h.claudeAuth.recoveredAt)}` : "Logged in"} />
           <HealthRow icon={Github} name="GitHub integration" ok={h ? h.github.configured : null} detail={h?.github.configured ? "Token configured" : "Set GITHUB_TOKEN in backend/.env"} />
         </ul>
       </section>

@@ -2,6 +2,7 @@ import { config, loadSettings, log, prisma } from "./config";
 import { processApprovedMerges } from "./merge";
 import { pickProvider } from "./providers";
 import { claimTask, executeTask } from "./runTask";
+import { authWatchdog, claudeAuthOk } from "./claudeAuth";
 
 interface Active { taskId: number; agentId: number; slug: string; abort: AbortController; done: Promise<void>; startedAt: number; timeoutSec: number }
 const WATCHDOG_BUFFER_SEC = 60;
@@ -106,6 +107,10 @@ async function tick() {
   if (settings.globalPaused) return;
 
   await processApprovedMerges(withProjectLock);
+
+  // Claude CLI auth watchdog: never start runs that are certain to fail; probe for recovery instead.
+  await authWatchdog().catch(e => log("warn", "auth watchdog failed", { error: (e as Error).message }));
+  if (!(await claudeAuthOk())) return;
 
   const slots = settings.maxConcurrentAgents - active.size;
   if (slots <= 0) return;
