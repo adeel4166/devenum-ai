@@ -9,17 +9,23 @@ export function useApi<T>(path: string | null, pollMs = 0) {
 
   const reload = useCallback(async () => {
     if (!path) return;
-    try { setData(await api<T>(path)); setError(null); }
-    catch (e) { setError((e as Error).message); }
-    finally { setLoading(false); }
+    try {
+      setData(await api<T>(path));
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
   }, [path]);
 
   useEffect(() => {
+    setLoading(true);
     reload();
     if (!pollMs) return;
     const t = setInterval(reload, pollMs);
     return () => clearInterval(t);
   }, [reload, pollMs]);
 
-  return { data, error, loading, reload };
+  return { data, setData, error, loading, reload };
 }

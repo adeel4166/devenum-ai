@@ -1,60 +1,51 @@
 "use client";
-import { useState } from "react";
-import { Pause, Play, Power, Settings2 } from "lucide-react";
+import { Suspense, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Pause, Play, Power } from "lucide-react";
 import { Agent, api, label } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { useSession } from "@/lib/session";
-import { Badge, ErrorBox, Modal, PageHeader, providerName } from "@/components/ui";
+import { useToast } from "@/components/toast";
+import { AgentDrawer } from "@/components/AgentDrawer";
+import { Badge, CardSkeletons, ErrorBox, PageHeader, providerName } from "@/components/ui";
 
 const DEPTS = ["LEADERSHIP", "ARCHITECTURE", "DESIGN", "ENGINEERING", "QA_SECURITY", "DEVOPS"];
 const STATUSES = ["AVAILABLE", "RUNNING", "WAITING_APPROVAL", "BLOCKED", "PAUSED", "FAILED", "DISABLED"];
 
 export default function AgentsPage() {
-  const [dept, setDept] = useState("");
-  const [status, setStatus] = useState("");
+  return <Suspense fallback={null}><AgentsInner /></Suspense>;
+}
+
+function AgentsInner() {
+  const sp = useSearchParams();
+  const [dept, setDept] = useState(sp.get("department") ?? "");
+  const [status, setStatus] = useState(sp.get("status") ?? "");
   const qs = new URLSearchParams({ ...(dept && { department: dept }), ...(status && { status }) }).toString();
-  const { data, error, reload } = useApi<Agent[]>(`/agents${qs ? `?${qs}` : ""}`, 8000);
+  const { data, error, loading, reload } = useApi<Agent[]>(`/agents${qs ? `?${qs}` : ""}`, 8000);
   const { canWrite } = useSession();
-  const [err, setErr] = useState<string | null>(null);
-  const [editing, setEditing] = useState<Agent | null>(null);
+  const { run } = useToast();
+  const [open, setOpen] = useState<number | null>(null);
 
   async function act(a: Agent, action: string) {
-    try {
-      await api(`/agents/${a.id}/action`, { method: "POST", body: { action } });
-      setErr(null);
-      reload();
-    } catch (e) {
-      setErr((e as Error).message);
-    }
+    if (action === "disable" && !window.confirm(`Disable ${a.name}?`)) return;
+    if (await run(() => api(`/agents/${a.id}/action`, { method: "POST", body: { action } }), `${a.name}: ${action} applied`)) reload();
   }
+  const stop = (e: React.MouseEvent) => e.stopPropagation();
 
   return (
     <>
-      <PageHeader
-        title="Agents Directory"
-        subtitle="Your digital employees"
-        action={
-          <div className="flex gap-2">
-            <select className="input !w-auto" value={dept} onChange={e => setDept(e.target.value)}>
-              <option value="">All departments</option>
-              {DEPTS.map(d => <option key={d} value={d}>{label(d)}</option>)}
-            </select>
-            <select className="input !w-auto" value={status} onChange={e => setStatus(e.target.value)}>
-              <option value="">All statuses</option>
-              {STATUSES.map(d => <option key={d} value={d}>{label(d)}</option>)}
-            </select>
-          </div>
-        }
-      />
-      <ErrorBox message={error || err} />
+      <PageHeader title="Agents Directory" subtitle="Click an agent to inspect runs and edit its manifest" action={
+        <div className="flex gap-2">
+          <select className="input !w-auto" value={dept} onChange={e => setDept(e.target.value)}><option value="">All departments</option>{DEPTS.map(d => <option key={d} value={d}>{label(d)}</option>)}</select>
+          <select className="input !w-auto" value={status} onChange={e => setStatus(e.target.value)}><option value="">All statuses</option>{STATUSES.map(d => <option key={d} value={d}>{label(d)}</option>)}</select>
+        </div>} />
+      <ErrorBox message={error} />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {loading && !data && <CardSkeletons n={6} h="h-44" />}
         {data?.map(a => (
-          <div key={a.id} className="card flex flex-col p-5">
+          <div key={a.id} className="card card-hover flex flex-col p-5" onClick={() => setOpen(a.id)}>
             <div className="mb-3 flex items-start justify-between gap-2">
-              <div>
-                <div className="font-semibold text-white">{a.name}</div>
-                <div className="text-xs text-slate-500">{a.roleTitle} · {label(a.department)}</div>
-              </div>
+              <div><div className="font-semibold text-white">{a.name}</div><div className="text-xs text-slate-500">{a.roleTitle} · {label(a.department)}</div></div>
               <Badge value={a.status} />
             </div>
             <dl className="mb-4 space-y-1.5 text-sm">
@@ -63,57 +54,18 @@ export default function AgentsPage() {
               <div className="flex justify-between"><dt className="text-slate-500">Total runs</dt><dd>{a.totalRuns}</dd></div>
             </dl>
             {canWrite && (
-              <div className="mt-auto flex flex-wrap gap-2">
-                {a.status === "PAUSED" ? (
-                  <button className="btn-ghost" onClick={() => act(a, "resume")}><Play size={14} /> Resume</button>
-                ) : (
-                  a.status !== "DISABLED" && <button className="btn-ghost" onClick={() => act(a, "pause")}><Pause size={14} /> Pause</button>
-                )}
-                {a.status === "DISABLED" ? (
-                  <button className="btn-ghost" onClick={() => act(a, "enable")}><Power size={14} /> Enable</button>
-                ) : (
-                  <button className="btn-ghost" onClick={() => window.confirm(`Disable ${a.name}?`) && act(a, "disable")}><Power size={14} /> Disable</button>
-                )}
-                <button className="btn-ghost ml-auto" onClick={() => setEditing(a)}><Settings2 size={14} /> Manifest</button>
+              <div className="mt-auto flex flex-wrap gap-2" onClick={stop}>
+                {a.status === "PAUSED" ? <button className="btn-ghost" onClick={() => act(a, "resume")}><Play size={14} /> Resume</button>
+                  : a.status !== "DISABLED" && <button className="btn-ghost" onClick={() => act(a, "pause")}><Pause size={14} /> Pause</button>}
+                {a.status === "DISABLED" ? <button className="btn-ghost" onClick={() => act(a, "enable")}><Power size={14} /> Enable</button>
+                  : <button className="btn-ghost" onClick={() => act(a, "disable")}><Power size={14} /> Disable</button>}
               </div>
             )}
           </div>
         ))}
+        {data?.length === 0 && <div className="card col-span-full p-8 text-center text-slate-500">No agents match these filters.</div>}
       </div>
-      {editing && <ManifestModal agent={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); }} />}
+      {open && <AgentDrawer agentId={open} onClose={() => setOpen(null)} onChanged={reload} />}
     </>
-  );
-}
-
-function ManifestModal({ agent, onClose, onSaved }: { agent: Agent; onClose: () => void; onSaved: () => void }) {
-  const [text, setText] = useState(JSON.stringify(agent.manifest, null, 2));
-  const [err, setErr] = useState<string | null>(null);
-
-  async function save() {
-    let manifest: unknown;
-    try {
-      manifest = JSON.parse(text);
-    } catch {
-      setErr("Manifest is not valid JSON");
-      return;
-    }
-    try {
-      await api(`/agents/${agent.id}/manifest`, { method: "PUT", body: { manifest } });
-      onSaved();
-    } catch (e) {
-      setErr((e as Error).message);
-    }
-  }
-
-  return (
-    <Modal title={`Manifest — ${agent.name}`} onClose={onClose} wide>
-      <ErrorBox message={err} />
-      <p className="mb-2 text-xs text-slate-400">Required: allowedTools[], prohibitedActions[], maxSteps, timeoutSeconds. Changes are written to the audit log.</p>
-      <textarea className="input h-80 font-mono text-xs" spellCheck={false} value={text} onChange={e => setText(e.target.value)} />
-      <div className="mt-4 flex justify-end gap-2">
-        <button className="btn-ghost" onClick={onClose}>Cancel</button>
-        <button className="btn-primary" onClick={save}>Save manifest</button>
-      </div>
-    </Modal>
   );
 }

@@ -49,3 +49,15 @@ cd portal && npm run typecheck && npm run build
 - `ProposalStatus` includes an extra `CHANGES_REQUESTED` value so "Request Changes" decisions are represented on the proposal itself.
 - QA and Security engineers use `GEMINI_API` as the primary provider (the enum has one value per agent); their manifests note the Gemini + Claude dual-model setup.
 - The Gemini API key is stored server-side in the `Setting` table and returned masked.
+
+## Upgrading from v1 to v2
+
+v2 adds `User.isActive` (default `true`), so run a new migration against your existing database:
+
+```bash
+cd backend
+npx prisma migrate dev --name v2_user_active
+npm run dev
+```
+
+The Claude CLI setting key is now `claudeCliEnabled` (previously `claudeCliMode`); re-save it once on the Settings page.

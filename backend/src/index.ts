@@ -5,6 +5,7 @@ import helmet from "helmet";
 import { requireAuth } from "./auth";
 import { errorHandler } from "./http";
 import { authRouter } from "./routes/auth";
+import { usersRouter } from "./routes/users";
 import { agentsRouter } from "./routes/agents";
 import { projectsRouter } from "./routes/projects";
 import { tasksRouter } from "./routes/tasks";
@@ -21,12 +22,15 @@ app.use(express.json({ limit: "1mb" }));
 
 app.get("/health", (_req, res) => res.json({ ok: true, service: "devenum-backend" }));
 app.use("/api/auth", authRouter);
+app.use("/api/users", requireAuth, usersRouter);
 app.use("/api/agents", requireAuth, agentsRouter);
 app.use("/api/projects", requireAuth, projectsRouter);
 app.use("/api/tasks", requireAuth, tasksRouter);
 app.use("/api/approvals", requireAuth, approvalsRouter);
 app.use("/api/logs", requireAuth, logsRouter);
+// /api/system holds settings, status and dashboard; /api/settings is the spec-friendly alias for it.
 app.use("/api/system", requireAuth, systemRouter);
+app.use("/api/settings", requireAuth, (req, res, next) => { req.url = `/settings${req.url === "/" ? "" : req.url}`; systemRouter(req, res, next); });
 app.use((_req, res) => res.status(404).json({ error: "Not found" }));
 app.use(errorHandler);
 

@@ -10,7 +10,8 @@ const writers = requireRole("CEO", "ADMIN");
 
 export const DEFAULT_SETTINGS = {
   geminiApiKey: "",
-  claudeCliMode: true,
+  claudeCliEnabled: true,
+  autoExpireHours: 48,
   globalPaused: false,
   maxConcurrentAgents: 3,
   maxStepsPerRun: 50,
@@ -20,7 +21,7 @@ export const DEFAULT_SETTINGS = {
 };
 type Settings = typeof DEFAULT_SETTINGS;
 
-async function loadSettings(): Promise<Settings> {
+export async function loadSettings(): Promise<Settings> {
   const rows = await prisma.setting.findMany();
   const s: Record<string, unknown> = { ...DEFAULT_SETTINGS };
   for (const r of rows) s[r.key] = r.value;
@@ -33,7 +34,8 @@ systemRouter.get("/settings", wrap(async (_req, res) => res.json(mask(await load
 systemRouter.put("/settings", writers, wrap(async (req, res) => {
   const b = z.object({
     geminiApiKey: z.string().max(200).optional(),
-    claudeCliMode: z.boolean().optional(),
+    claudeCliEnabled: z.boolean().optional(),
+    autoExpireHours: z.number().int().min(1).max(720).optional(),
     maxConcurrentAgents: z.number().int().min(1).max(50).optional(),
     maxStepsPerRun: z.number().int().min(1).max(1000).optional(),
     maxRunTimeoutSeconds: z.number().int().min(10).max(86400).optional(),

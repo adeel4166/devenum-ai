@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { UserRole } from "@prisma/client";
+import { prisma } from "./db";
 
 export interface AuthUser { id: number; email: string; role: UserRole; name: string }
 declare module "express-serve-static-core" {
@@ -16,12 +17,15 @@ const secret = () => {
 export const signToken = (u: AuthUser) =>
   jwt.sign(u, secret(), { expiresIn: (process.env.JWT_EXPIRES_IN || "12h") as jwt.SignOptions["expiresIn"] });
 
-export function requireAuth(req: Request, res: Response, next: NextFunction) {
+export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const h = req.headers.authorization;
   if (!h?.startsWith("Bearer ")) return res.status(401).json({ error: "Missing token" });
   try {
     const p = jwt.verify(h.slice(7), secret()) as AuthUser;
-    req.user = { id: p.id, email: p.email, role: p.role, name: p.name };
+    // Re-check the database so deactivated users / role changes take effect immediately.
+    const u = await prisma.user.findUnique({ where: { id: p.id } });
+    if (!u || !u.isActive) return res.status(401).json({ error: "Account disabled" });
+    req.user = { id: u.id, email: u.email, role: u.role, name: u.name };
     next();
   } catch {
     res.status(401).json({ error: "Invalid or expired token" });

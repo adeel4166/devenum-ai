@@ -6,6 +6,7 @@
 body { @apply bg-ink-950 text-slate-200 antialiased; }
 
 @layer components {
+  .card-hover { @apply cursor-pointer transition hover:border-brand/40 hover:bg-ink-700/80; }
   .card { @apply rounded-xl border border-white/5 bg-ink-800/80 shadow-lg shadow-black/20; }
   .btn { @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50; }
   .btn-primary { @apply btn bg-brand text-white hover:bg-brand-soft; }
@@ -14,3 +15,9 @@ body { @apply bg-ink-950 text-slate-200 antialiased; }
   .input { @apply w-full rounded-lg border border-white/10 bg-ink-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-brand focus:outline-none; }
   .label { @apply mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400; }
 }
+
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes drawer-in { from { transform: translateX(100%); } to { transform: none; } }
+.toast-in { animation: toast-in .2s ease-out; }
+.drawer-in { animation: drawer-in .22s ease-out; }
+.card { backdrop-filter: blur(6px); }

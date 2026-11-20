@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { Activity, Bot, CheckSquare, FolderKanban, LayoutDashboard, LogOut, OctagonAlert, Play, ScrollText, Settings, ShieldCheck } from "lucide-react";
 import { SessionProvider, useSession } from "@/lib/session";
+import { ToastProvider, useToast } from "@/components/toast";
 import { api } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 
@@ -22,6 +23,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   const { user, canWrite, projects, projectId, setProjectId, logout } = useSession();
   const status = useApi<{ globalPaused: boolean }>("/system/status", 10000);
   const pending = useApi<{ kpis: { pendingApprovals: number } }>("/system/dashboard", 15000);
+  const { toast } = useToast();
   const [busy, setBusy] = useState(false);
   const paused = status.data?.globalPaused ?? false;
 
@@ -33,7 +35,7 @@ function Shell({ children }: { children: React.ReactNode }) {
       await api(paused ? "/system/resume-all" : "/system/pause-all", { method: "POST" });
       window.location.reload();
     } catch (e) {
-      window.alert((e as Error).message);
+      toast("error", (e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -97,8 +99,8 @@ function Shell({ children }: { children: React.ReactNode }) {
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
-    <SessionProvider>
+    <SessionProvider><ToastProvider>
       <Shell>{children}</Shell>
-    </SessionProvider>
+    </ToastProvider></SessionProvider>
   );
 }
