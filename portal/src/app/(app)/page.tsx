@@ -15,7 +15,7 @@ interface Dash {
   proposals: { id: number; actionType: string; scopeSummary: string; riskLevel: string; requestingAgent: { name: string }; project: { name: string } }[];
 }
 const DEPTS = ["LEADERSHIP", "ARCHITECTURE", "DESIGN", "ENGINEERING", "QA_SECURITY", "DEVOPS"];
-const ACTOR_TONE: Record<string, string> = { AGENT: "bg-sky-400", CEO: "bg-emerald-400", SYSTEM: "bg-slate-400" };
+const ACTOR_TONE: Record<string, string> = { AGENT: "bg-sky-400", CEO: "bg-emerald-400", DISCORD_CEO: "bg-indigo-400", SYSTEM: "bg-slate-400" };
 
 export default function Overview() {
   const { data, error, loading, reload } = useApi<Dash>("/system/dashboard", 6000);

@@ -9,7 +9,9 @@ import { usersRouter } from "./routes/users";
 import { agentsRouter } from "./routes/agents";
 import { projectsRouter } from "./routes/projects";
 import { tasksRouter } from "./routes/tasks";
-import { approvalsRouter } from "./routes/approvals";
+import { approvalsRouter, proposalsRouter } from "./routes/approvals";
+import { botRouter } from "./routes/bot";
+import { requireServiceToken } from "./serviceAuth";
 import { logsRouter } from "./routes/logs";
 import { systemRouter } from "./routes/system";
 
@@ -27,6 +29,9 @@ app.use("/api/agents", requireAuth, agentsRouter);
 app.use("/api/projects", requireAuth, projectsRouter);
 app.use("/api/tasks", requireAuth, tasksRouter);
 app.use("/api/approvals", requireAuth, approvalsRouter);
+app.use("/api/proposals", requireAuth, proposalsRouter);
+// Internal service API for devenum-bot (shared BOT_SERVICE_TOKEN, not a user JWT).
+app.use("/api/bot", requireServiceToken, botRouter);
 app.use("/api/logs", requireAuth, logsRouter);
 // /api/system holds settings, status and dashboard; /api/settings is the spec-friendly alias for it.
 app.use("/api/system", requireAuth, systemRouter);

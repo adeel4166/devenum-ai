@@ -1,0 +1,5 @@
+node_modules
+dist
+.env
+# copied from ../backend/prisma/schema.prisma by `npm run prisma:generate`
+prisma/

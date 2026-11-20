@@ -34,7 +34,7 @@ export default function LogsPage() {
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <Tabs value={tab} onChange={setTab} tabs={[{ id: "audit", label: "Audit Trail" }, { id: "runs", label: "Agent Runs" }, { id: "decisions", label: "CEO Decisions" }]} />
         {tab === "audit" && <>
-          <select className="input !w-auto" value={actor} onChange={e => setActor(e.target.value)}><option value="">All actors</option>{["CEO", "AGENT", "SYSTEM"].map(a => <option key={a} value={a}>{a}</option>)}</select>
+          <select className="input !w-auto" value={actor} onChange={e => setActor(e.target.value)}><option value="">All actors</option>{["CEO", "DISCORD_CEO", "AGENT", "SYSTEM"].map(a => <option key={a} value={a}>{a}</option>)}</select>
           <select className="input !w-auto" value={prefix} onChange={e => setPrefix(e.target.value)}><option value="">All actions</option>{PREFIXES.map(a => <option key={a} value={a}>{label(a.replace("_", ""))}</option>)}</select>
         </>}
         {tab === "runs" && <select className="input !w-auto" value={status} onChange={e => setStatus(e.target.value)}><option value="">All statuses</option>{["QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"].map(a => <option key={a} value={a}>{label(a)}</option>)}</select>}

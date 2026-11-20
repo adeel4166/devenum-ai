@@ -107,6 +107,12 @@ enum ActorType {
   CEO
   AGENT
   SYSTEM
+  DISCORD_CEO
+}
+
+enum MergeStatus {
+  MERGED
+  FAILED
 }
 
 
@@ -194,6 +200,17 @@ model Proposal {
   validationPlan    String         @db.Text
   status            ProposalStatus @default(PENDING)
   expiresAt         DateTime
+  /// Git branch produced by the worker (task/<taskId>); null for proposals not backed by a branch.
+  branchName        String?
+  /// Files changed on branchName relative to main (JSON array of paths).
+  changedFiles      Json?
+  mergeStatus       MergeStatus?
+  mergeCommit       String?
+  mergeError        String?        @db.Text
+  mergedAt          DateTime?
+  /// Discord alert bookkeeping (set by devenum-bot).
+  discordMessageId  String?
+  discordNotifiedAt DateTime?
   createdAt         DateTime       @default(now())
   project           Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   task              Task?          @relation(fields: [taskId], references: [id], onDelete: SetNull)
@@ -202,6 +219,7 @@ model Proposal {
 
   @@index([status, expiresAt])
   @@index([projectId])
+  @@index([discordNotifiedAt])
 }
 
 model Approval {

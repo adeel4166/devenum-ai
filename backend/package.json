@@ -10,9 +10,13 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev --name init",
     "prisma:deploy": "prisma migrate deploy",
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed.ts",
+    "agents:claude-code": "tsx prisma/agents-claude-code.ts",
+    "db:push": "prisma db push"
   },
-  "prisma": { "seed": "tsx prisma/seed.ts" },
+  "prisma": { "seed": "tsx prisma/seed.ts",
+    "agents:claude-code": "tsx prisma/agents-claude-code.ts",
+    "db:push": "prisma db push" },
   "dependencies": {
     "@prisma/client": "^6.1.0",
     "bcryptjs": "^2.4.3",
